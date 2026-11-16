@@ -1,0 +1,6 @@
+{
+  "name": "PulseCast",
+  "description": "Audio-video calling, real-time messaging, and video publishing platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
