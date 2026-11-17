@@ -81,6 +81,27 @@ jobs:
         run: |
           tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
 
+      - name: Ensure app/google-services.json is present
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -f app/google-services.json ]; then
+            echo "Using committed app/google-services.json"
+            echo "CLEANUP_GOOGLE_SERVICES=false" >> "$GITHUB_ENV"
+          elif [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON secret"
+            echo "CLEANUP_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
+          elif [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | tr -d '\r\n' | base64 -d > app/google-services.json
+            echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON_BASE64 secret"
+            echo "CLEANUP_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
+          else
+            echo "::error::app/google-services.json is missing! Add the GOOGLE_SERVICES_JSON secret in GitHub (Settings -> Secrets and variables -> Actions) or commit app/google-services.json to the repository."
+            exit 1
+          fi
+
       - name: Run unit tests
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
         run: gradle :app:testDebugUnitTest --no-daemon
@@ -121,9 +142,13 @@ jobs:
           cd release-assets
           sha256sum * > SHA256SUMS.txt
 
-      - name: Clean up temporary keystores and env
+      - name: Clean up temporary keystores, google-services.json, and env
         if: always()
-        run: rm -f debug.keystore my-upload-key.jks .env
+        run: |
+          rm -f debug.keystore my-upload-key.jks .env
+          if [ "${CLEANUP_GOOGLE_SERVICES}" = "true" ]; then
+            rm -f app/google-services.json
+          fi
 
       - name: Upload workflow build artifacts
         uses: actions/upload-artifact@v4

@@ -160,12 +160,13 @@ npm run dev
 
 The repository includes an automated workflow at `.github/workflows/android-release.yml` that runs unit tests, builds the Android APK, and publishes downloadable assets directly to **GitHub Releases**.
 
-### Option 1: Publish a Release Immediately (Zero Setup)
+### Option 1: Publish a Release Immediately
 1. Push your project to GitHub.
-2. Either:
+2. If `app/google-services.json` was omitted during GitHub export/push, add a Repository Secret named `GOOGLE_SERVICES_JSON` under **Settings → Secrets and variables → Actions** containing the contents of `app/google-services.json` (or `GOOGLE_SERVICES_JSON_BASE64` with its base64-encoded content).
+3. Either:
    - **Tag push**: `git tag v1.0.0 && git push origin v1.0.0`
    - **Manual trigger**: Open **Actions → Android APK Release → Run workflow** in GitHub (optionally enter a tag such as `v1.0.0`).
-3. Once the workflow finishes, open **Releases** in your GitHub repository and download `PulseCast-<version>-debug.apk` (signed with the repository's pre-registered `debug.keystore.base64` so Firebase Google Sign-In works immediately).
+4. Once the workflow finishes, open **Releases** in your GitHub repository and download `PulseCast-<version>-debug.apk` (signed with the repository's pre-registered `debug.keystore.base64` so Firebase Google Sign-In works immediately).
 
 ### Option 2: Publish Production-Signed Release APK & AAB (Optional)
 If you want an additional release-signed `.apk` and `.aab` for distribution or Google Play:
