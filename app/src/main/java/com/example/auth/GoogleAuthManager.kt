@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 
 private const val TAG = "PulseCastAuth"
+private const val EXPECTED_GOOGLE_SERVICES_SHA1 = "56:84:F3:37:E2:F3:DB:F3:AB:1E:F0:1A:A0:7E:13:BF:C8:9E:BB:A3"
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -156,14 +157,34 @@ fun onGoogleSignInClicked(
                     .addCredentialOption(fallbackOption)
                     .build()
                 credentialManager.getCredential(activityContext, fallbackRequest)
+            } catch (primaryErr: GetCredentialException) {
+                if (primaryErr is GetCredentialCancellationException) throw primaryErr
+                Log.w(TAG, "Primary SignInWithGoogle failed (${primaryErr.javaClass.simpleName}), trying GetGoogleIdOption fallback", primaryErr)
+                val fallbackOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(clientId)
+                    .setAutoSelectEnabled(false)
+                    .build()
+                val fallbackRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(fallbackOption)
+                    .build()
+                credentialManager.getCredential(activityContext, fallbackRequest)
             }
 
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
-                withContext(Dispatchers.Main) { onAuthSuccess() }
+                val authResult = withContext(NonCancellable) {
+                    Firebase.auth.signInWithCredential(authCredential).await()
+                }
+                if (authResult.user != null || Firebase.auth.currentUser != null) {
+                    withContext(Dispatchers.Main) { onAuthSuccess() }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        onAuthError("Firebase sign-in returned no user session. Please try again.")
+                    }
+                }
             } else {
                 withContext(Dispatchers.Main) {
                     onAuthError("Unexpected credential type returned.")
@@ -173,7 +194,19 @@ fun onGoogleSignInClicked(
             throw e
         } catch (e: GetCredentialCancellationException) {
             Log.w(TAG, "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
-            withContext(Dispatchers.Main) { onAuthCancelled() }
+            val runtimeSha1 = context.getSigningSha1()
+            val detail = e.errorMessage?.toString()?.takeIf { it.isNotBlank() }
+            if (runtimeSha1 != null && !runtimeSha1.equals(EXPECTED_GOOGLE_SERVICES_SHA1, ignoreCase = true)) {
+                withContext(Dispatchers.Main) {
+                    onAuthError(
+                        "Google Sign-In was rejected or cancelled because this APK's SHA-1 ($runtimeSha1) does not match Firebase ($EXPECTED_GOOGLE_SERVICES_SHA1). Add $runtimeSha1 in Firebase Console -> Project Settings -> ${context.packageName}, OR set DEBUG_KEYSTORE_BASE64 in GitHub Secrets and rebuild."
+                    )
+                }
+            } else if (detail != null) {
+                withContext(Dispatchers.Main) { onAuthError("Google Sign-In cancelled: $detail") }
+            } else {
+                withContext(Dispatchers.Main) { onAuthCancelled() }
+            }
         } catch (e: NoCredentialException) {
             Log.w(TAG, "No Google credentials available on device: ${e.message}", e)
             withContext(Dispatchers.Main) {
@@ -183,16 +216,14 @@ fun onGoogleSignInClicked(
             Log.e(TAG, "Credential Manager error during Google Sign-In", e)
             val rawMsg = e.errorMessage?.toString() ?: e.localizedMessage ?: "Google Sign-In could not complete."
             val lower = rawMsg.lowercase()
-            val sha1 = if (
+            val runtimeSha1 = context.getSigningSha1()
+            val sha1Mismatch = runtimeSha1 != null && !runtimeSha1.equals(EXPECTED_GOOGLE_SERVICES_SHA1, ignoreCase = true)
+            val userMsg = if (
+                sha1Mismatch ||
                 "28444" in lower || "developer" in lower || "10:" in lower ||
                 "16:" in lower || "reauth" in lower || "fingerprint" in lower || "caller" in lower
             ) {
-                context.getSigningSha1()
-            } else {
-                null
-            }
-            val userMsg = if (sha1 != null) {
-                "Google Sign-In blocked: APK SHA-1 ($sha1) is not registered in Firebase Console for ${context.packageName}. Add this SHA-1 in Firebase Project Settings or sign with DEBUG_KEYSTORE_BASE64."
+                "Google Sign-In blocked: APK SHA-1 (${runtimeSha1 ?: "unknown"}) is not registered in Firebase Console for ${context.packageName}. Add this SHA-1 in Firebase Project Settings or sign with DEBUG_KEYSTORE_BASE64. ($rawMsg)"
             } else {
                 rawMsg
             }
