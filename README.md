@@ -168,10 +168,14 @@ The Android build requires `app/google-services.json` so the Google Services Gra
   2. Place the file at **`app/google-services.json`** in your project (`git add app/google-services.json && git commit -m "Add google-services.json" && git push`), or upload it into the `app/` folder directly on GitHub (**Add file → Upload files**).
 
 - **Method B — Use a GitHub Repository Secret (Recommended for CI/CD & Public Repos):**
-  1. Copy the full JSON contents of `app/google-services.json`.
+  1. Generate a single-line base64 string (or copy the raw JSON contents) of `app/google-services.json`:
+     - **Linux:** `base64 -w 0 app/google-services.json`
+     - **macOS:** `base64 -i app/google-services.json | tr -d '\n'`
+     - **Windows (PowerShell):** `[Convert]::ToBase64String([IO.File]::ReadAllBytes("app/google-services.json"))`
   2. In your GitHub repository, go to **Settings → Secrets and variables → Actions → Repository secrets** and click **New repository secret**.
-  3. Set **Name** to `GOOGLE_SERVICES_JSON` and paste the JSON content into **Secret** (or use `GOOGLE_SERVICES_JSON_BASE64` with `base64 -w 0 app/google-services.json`).
+  3. Set **Name** to `GOOGLE_SERVICES_JSON_BASE64` and paste the base64 output into **Secret** (or set **Name** to `GOOGLE_SERVICES_JSON` with the raw JSON text).
   4. The CI workflow automatically restores `app/google-services.json` during the build and removes the temporary file afterward.
+  - **Official Guides:** [Firebase Android `google-services.json` Setup](https://firebase.google.com/docs/android/setup#config-file) · [Using Secrets in GitHub Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions)
 
 ### Option 1: Publish a Release Immediately
 1. Ensure `app/google-services.json` is configured via **Method A** or **Method B** above.

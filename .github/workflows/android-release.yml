@@ -98,7 +98,40 @@ jobs:
             echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON_BASE64 secret"
             echo "CLEANUP_GOOGLE_SERVICES=true" >> "$GITHUB_ENV"
           else
-            echo "::error::app/google-services.json is missing! Add the GOOGLE_SERVICES_JSON secret in GitHub (Settings -> Secrets and variables -> Actions) or commit app/google-services.json to the repository."
+            echo "::error title=Missing app/google-services.json::app/google-services.json was not found and neither GOOGLE_SERVICES_JSON nor GOOGLE_SERVICES_JSON_BASE64 is configured."
+            cat <<'EOF' >&2
+
+          ========================================================================
+          ERROR: Missing app/google-services.json
+          ========================================================================
+          PulseCast requires app/google-services.json so the Google Services
+          Gradle plugin can configure Firebase Auth, Firestore, Storage, and
+          Google Sign-In (default_web_client_id).
+
+          HOW TO FIX (choose one):
+
+          1. Recommended — Add a GitHub Repository Secret:
+             Go to: Settings -> Secrets and variables -> Actions -> Repository secrets
+             Create ONE of these secrets:
+               - GOOGLE_SERVICES_JSON_BASE64  (base64-encoded file, single line)
+               - GOOGLE_SERVICES_JSON         (raw JSON contents of the file)
+
+             Generate the base64 value locally with:
+               Linux:   base64 -w 0 app/google-services.json
+               macOS:   base64 -i app/google-services.json | tr -d '\n'
+               Windows: [Convert]::ToBase64String([IO.File]::ReadAllBytes("app/google-services.json"))
+
+          2. Alternative — Commit/Upload directly to your repository:
+             Download google-services.json from Firebase Console and place it at:
+               app/google-services.json
+
+          Official Documentation:
+            - Firebase google-services.json setup:
+              https://firebase.google.com/docs/android/setup#config-file
+            - GitHub Actions Secrets guide:
+              https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions
+          ========================================================================
+          EOF
             exit 1
           fi
 
