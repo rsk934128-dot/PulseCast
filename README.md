@@ -160,13 +160,25 @@ npm run dev
 
 The repository includes an automated workflow at `.github/workflows/android-release.yml` that runs unit tests, builds the Android APK, and publishes downloadable assets directly to **GitHub Releases**.
 
+### Prerequisite: `app/google-services.json` Configuration
+The Android build requires `app/google-services.json` so the Google Services Gradle plugin can generate Firebase configuration resources (such as `default_web_client_id` for Google Sign-In). If your repository or CI/CD build fails with `File google-services.json is missing`, resolve it using **either** method below:
+
+- **Method A — Add `google-services.json` directly to `app/` (Local & Private Repos):**
+  1. Open **Firebase Console → Project Settings → Your apps → Android app (`com.aistudio.pulsecast.vktmrx`)** and download `google-services.json` (or copy `app/google-services.json` from your local workspace).
+  2. Place the file at **`app/google-services.json`** in your project (`git add app/google-services.json && git commit -m "Add google-services.json" && git push`), or upload it into the `app/` folder directly on GitHub (**Add file → Upload files**).
+
+- **Method B — Use a GitHub Repository Secret (Recommended for CI/CD & Public Repos):**
+  1. Copy the full JSON contents of `app/google-services.json`.
+  2. In your GitHub repository, go to **Settings → Secrets and variables → Actions → Repository secrets** and click **New repository secret**.
+  3. Set **Name** to `GOOGLE_SERVICES_JSON` and paste the JSON content into **Secret** (or use `GOOGLE_SERVICES_JSON_BASE64` with `base64 -w 0 app/google-services.json`).
+  4. The CI workflow automatically restores `app/google-services.json` during the build and removes the temporary file afterward.
+
 ### Option 1: Publish a Release Immediately
-1. Push your project to GitHub.
-2. If `app/google-services.json` was omitted during GitHub export/push, add a Repository Secret named `GOOGLE_SERVICES_JSON` under **Settings → Secrets and variables → Actions** containing the contents of `app/google-services.json` (or `GOOGLE_SERVICES_JSON_BASE64` with its base64-encoded content).
-3. Either:
+1. Ensure `app/google-services.json` is configured via **Method A** or **Method B** above.
+2. Trigger the release workflow using either method:
    - **Tag push**: `git tag v1.0.0 && git push origin v1.0.0`
    - **Manual trigger**: Open **Actions → Android APK Release → Run workflow** in GitHub (optionally enter a tag such as `v1.0.0`).
-4. Once the workflow finishes, open **Releases** in your GitHub repository and download `PulseCast-<version>-debug.apk` (signed with the repository's pre-registered `debug.keystore.base64` so Firebase Google Sign-In works immediately).
+3. Once the workflow finishes, open **Releases** in your GitHub repository and download `PulseCast-<version>-debug.apk` (signed with the repository's pre-registered `debug.keystore.base64` so Firebase Google Sign-In works immediately).
 
 ### Option 2: Publish Production-Signed Release APK & AAB (Optional)
 If you want an additional release-signed `.apk` and `.aab` for distribution or Google Play:
