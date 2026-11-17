@@ -334,6 +334,27 @@ class PulseCastViewModel(
         }
     }
 
+    fun startOrOpenDirectChat(peer: CreatorProfile) {
+        if (peer.userId == currentUserId) return
+        val existingChats = (chatsState.value as? UiState.Success)?.data.orEmpty()
+        val existingDirect = existingChats.firstOrNull { thread ->
+            !thread.isGroup &&
+                thread.participantIds.size == 2 &&
+                thread.participantIds.contains(currentUserId) &&
+                thread.participantIds.contains(peer.userId)
+        }
+        if (existingDirect != null) {
+            _selectedChatId.value = existingDirect.id
+            return
+        }
+        createChatThread(
+            title = peer.displayName.ifBlank { "@${peer.handle}" },
+            isGroup = false,
+            participantIds = listOf(peer.userId),
+            participantNames = listOf(peer.displayName)
+        )
+    }
+
     fun createChatThread(
         title: String,
         isGroup: Boolean,
@@ -385,23 +406,68 @@ class PulseCastViewModel(
         }
     }
 
-    fun startCall(callType: String, linkedChat: ChatThread? = null) {
+    fun startCall(
+        callType: String,
+        linkedChat: ChatThread? = null,
+        targetCreator: CreatorProfile? = null
+    ) {
         viewModelScope.launch {
+            val invitedIds = when {
+                linkedChat != null -> linkedChat.participantIds
+                targetCreator != null -> listOf(targetCreator.userId)
+                else -> emptyList()
+            }
+            val invitedNames = when {
+                linkedChat != null -> linkedChat.participantNames.orEmpty()
+                targetCreator != null -> listOf(targetCreator.displayName)
+                else -> emptyList()
+            }
             repository.createCallSession(
                 uid = currentUserId,
                 hostName = currentUserName,
-                callType = callType
+                callType = callType,
+                invitedParticipantIds = invitedIds,
+                invitedParticipantNames = invitedNames
             ).onSuccess { session ->
                 _activeCallId.value = session.roomCode
-                if (linkedChat != null) {
+                val chatToNotify = linkedChat ?: if (targetCreator != null) {
+                    (chatsState.value as? UiState.Success)?.data?.firstOrNull { thread ->
+                        !thread.isGroup &&
+                            thread.participantIds.size == 2 &&
+                            thread.participantIds.contains(currentUserId) &&
+                            thread.participantIds.contains(targetCreator.userId)
+                    }
+                } else {
+                    null
+                }
+                if (chatToNotify != null) {
                     repository.sendMessage(
-                        chatId = linkedChat.id,
+                        chatId = chatToNotify.id,
                         uid = currentUserId,
                         senderName = currentUserName,
-                        participantIds = linkedChat.participantIds,
+                        participantIds = chatToNotify.participantIds,
                         messageType = "call_event",
                         text = "Started ${callType.uppercase()} call · Room ${session.roomCode}"
                     )
+                } else if (targetCreator != null) {
+                    val createdChatId = repository.createChatThread(
+                        uid = currentUserId,
+                        creatorName = currentUserName,
+                        title = targetCreator.displayName.ifBlank { "@${targetCreator.handle}" },
+                        isGroup = false,
+                        participantIds = listOf(targetCreator.userId),
+                        participantNames = listOf(targetCreator.displayName)
+                    ).getOrNull()
+                    if (!createdChatId.isNullOrBlank()) {
+                        repository.sendMessage(
+                            chatId = createdChatId,
+                            uid = currentUserId,
+                            senderName = currentUserName,
+                            participantIds = listOf(currentUserId, targetCreator.userId),
+                            messageType = "call_event",
+                            text = "Started ${callType.uppercase()} call · Room ${session.roomCode}"
+                        )
+                    }
                 }
             }.onFailure {
                 _snackbarEvents.tryEmit(it.localizedMessage ?: "Unable to start call")

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -79,6 +80,14 @@ fun AuthScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(errorMessage) {
+        if (!errorMessage.isNullOrBlank()) {
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
+
     if (enableAutoSignIn) {
         LaunchedEffect(Unit) {
             attemptAutoSignIn(
@@ -100,7 +109,7 @@ fun AuthScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
@@ -198,12 +207,13 @@ fun AuthScreen(
                                 tint = MaterialTheme.colorScheme.onTertiaryContainer,
                                 modifier = Modifier.size(20.dp)
                             )
-                            Text(
-                                text = errorMessage.orEmpty(),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                modifier = Modifier.weight(1f)
-                            )
+                            SelectionContainer(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = errorMessage.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            }
                             IconButton(
                                 onClick = { errorMessage = null },
                                 modifier = Modifier.testTag("auth_error_dismiss_button")

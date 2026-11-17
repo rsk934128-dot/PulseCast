@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -86,6 +88,12 @@ fun CallsScreen(
 ) {
     val activeCall by viewModel.activeCallSession.collectAsStateWithLifecycle()
     val callsState by viewModel.callsState.collectAsStateWithLifecycle()
+    val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
+    val otherCreators = remember(creatorsState, viewModel.currentUserId) {
+        (creatorsState as? UiState.Success)?.data
+            ?.filter { it.userId != viewModel.currentUserId }
+            .orEmpty()
+    }
     var roomCodeInput by remember { mutableStateOf("") }
 
     if (activeCall != null) {
@@ -216,9 +224,68 @@ fun CallsScreen(
                 }
             }
 
+            if (otherCreators.isNotEmpty()) {
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Call People Directly (${otherCreators.size})",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(otherCreators, key = { it.userId }) { creator ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier.width(208.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = creator.displayName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = "@${creator.handle}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            FilledTonalButton(
+                                                onClick = { viewModel.startCall("audio", targetCreator = creator) },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                            ) {
+                                                Icon(Icons.Filled.Call, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Audio", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                            Button(
+                                                onClick = { viewModel.startCall("video", targetCreator = creator) },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                            ) {
+                                                Icon(Icons.Filled.VideoCall, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Video", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 Text(
-                    text = "Recent Call Sessions",
+                    text = "Live & Recent Call Sessions",
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(top = 4.dp)
                 )
@@ -308,10 +375,15 @@ private fun CallHistoryRow(
                     text = "${session.callType.replaceFirstChar { it.uppercase() }} · ${session.roomCode}",
                     style = MaterialTheme.typography.titleSmall
                 )
+                val peerSummary = session.participantNames?.filter { it.isNotBlank() }?.joinToString(", ")
                 Text(
-                    text = "Host: ${session.hostName} · ${session.participantIds.size} participant(s)",
+                    text = if (!peerSummary.isNullOrBlank()) {
+                        "${session.status.uppercase()} · $peerSummary"
+                    } else {
+                        "Host: ${session.hostName} · ${session.participantIds.size} participant(s)"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (session.status != "ended") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             if (session.status != "ended") {

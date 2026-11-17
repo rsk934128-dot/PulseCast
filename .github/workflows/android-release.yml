@@ -101,7 +101,13 @@ jobs:
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-            keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1:|SHA256:" || true
+            SHA_INFO=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey)
+            SHA1_VAL=$(printf '%s\n' "$SHA_INFO" | awk '/SHA1:/ {print $2; exit}')
+            SHA256_VAL=$(printf '%s\n' "$SHA_INFO" | awk '/SHA256:/ {print $2; exit}')
+            echo "GENERATED_DEBUG_SHA1=${SHA1_VAL}" >> "$GITHUB_ENV"
+            echo "GENERATED_DEBUG_SHA256=${SHA256_VAL}" >> "$GITHUB_ENV"
+            echo "Generated debug SHA1: ${SHA1_VAL}"
+            echo "Generated debug SHA256: ${SHA256_VAL}"
           else
             echo "Verified debug.keystore successfully."
           fi
@@ -255,6 +261,13 @@ jobs:
               echo "- **Direct APK (GitHub Release):** [Open Release ${RELEASE_TAG}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
               echo "- **Workflow Run Artifact:** Scroll down to the **Artifacts** section on this page and download \`PulseCast-${RELEASE_TAG}-debug-apk\`."
               echo ""
+              if [ -n "$GENERATED_DEBUG_SHA1" ]; then
+                echo "### Google Sign-In SHA-1 Fingerprint (Important)"
+                echo "A fresh \`debug.keystore\` was generated for this CI run. For **Google Sign-In** to succeed in this APK, either:"
+                echo "- Add \`${GENERATED_DEBUG_SHA1}\` (SHA-1) and \`${GENERATED_DEBUG_SHA256}\` (SHA-256) in **Firebase Console -> Project Settings -> Android App (\`com.aistudio.pulsecast.vktmrx\`)**, OR"
+                echo "- Save your original \`debug.keystore.base64\` into the \`DEBUG_KEYSTORE_BASE64\` GitHub Repository Secret."
+                echo ""
+              fi
               echo "### Generated Packages"
               echo '```text'
               ls -lh release-assets/

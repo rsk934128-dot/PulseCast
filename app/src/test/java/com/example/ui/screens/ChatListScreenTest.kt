@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import com.example.data.ChatThread
+import com.example.data.CreatorProfile
 import com.example.ui.UiState
 import com.example.ui.theme.PulseCastTheme
 import com.google.firebase.Timestamp
@@ -137,5 +138,39 @@ class ChatListScreenTest {
 
         composeRule.onNodeWithTag("chat_thread_chat_1").performClick()
         assertEquals("chat_1", selectedThreadId)
+    }
+
+    @Test
+    fun peopleDirectory_showsOtherAccountsEvenWithNoChatsAndStartsDirectChatOrCall() {
+        val creators = listOf(
+            CreatorProfile(userId = "uid_alice", displayName = "Alice", handle = "alice"),
+            CreatorProfile(userId = "uid_bob", displayName = "Bob Rivera", handle = "bob_r", status = "Online"),
+            CreatorProfile(userId = "uid_carol", displayName = "Carol Chen", handle = "carol", bio = "Live audio host")
+        )
+
+        var chattedWithId: String? = null
+        var calledPeer: Pair<String, String>? = null
+        composeRule.setContent {
+            PulseCastTheme {
+                ChatListScreen(
+                    chatsState = UiState.Success(emptyList()),
+                    creatorsState = UiState.Success(creators),
+                    currentUserId = "uid_alice",
+                    onSelectChat = {},
+                    onNewChatClick = {},
+                    onStartDirectChat = { chattedWithId = it.userId },
+                    onCallCreator = { creator, type -> calledPeer = creator.userId to type }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("people_strip_card_uid_bob").assertIsDisplayed()
+        composeRule.onNodeWithTag("quick_chat_uid_bob").performClick()
+        assertEquals("uid_bob", chattedWithId)
+
+        composeRule.onNodeWithTag("chat_filter_people").performClick()
+        composeRule.onNodeWithTag("creator_directory_row_uid_carol").assertIsDisplayed()
+        composeRule.onNodeWithTag("directory_video_uid_carol").performClick()
+        assertEquals("uid_carol" to "video", calledPeer)
     }
 }

@@ -584,21 +584,29 @@ class PulseCastRepository(
         uid: String,
         hostName: String,
         callType: String,
-        customRoomCode: String? = null
+        customRoomCode: String? = null,
+        invitedParticipantIds: List<String> = emptyList(),
+        invitedParticipantNames: List<String> = emptyList()
     ): Result<CallSession> = runCatching {
         val code = (customRoomCode?.trim()?.uppercase()?.replace(Regex("[^A-Z0-9\\-]"), "")
             ?.takeIf { it.length in 4..32 })
             ?: "PULSE-${UUID.randomUUID().toString().take(4).uppercase()}"
         val docRef = db.collection("call_sessions").document(code)
         val cleanHostName = hostName.trim().ifBlank { "Creator" }.take(60)
+        val mergedIds = (listOf(uid) + invitedParticipantIds.map { it.trim() }.filter { it.isNotEmpty() })
+            .distinct()
+            .take(12)
+        val mergedNames = (listOf(cleanHostName) + invitedParticipantNames.map { it.trim() }.filter { it.isNotEmpty() })
+            .distinct()
+            .take(12)
         val payload = mapOf(
             "hostId" to uid,
             "hostName" to cleanHostName,
             "roomCode" to code,
             "callType" to callType,
             "status" to "ringing",
-            "participantIds" to listOf(uid),
-            "participantNames" to listOf(cleanHostName),
+            "participantIds" to mergedIds,
+            "participantNames" to mergedNames,
             "durationSec" to 0L,
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
@@ -612,8 +620,8 @@ class PulseCastRepository(
                 roomCode = code,
                 callType = callType,
                 status = "ringing",
-                participantIds = listOf(uid),
-                participantNames = listOf(cleanHostName),
+                participantIds = mergedIds,
+                participantNames = mergedNames,
                 durationSec = 0L
             )
         } catch (e: CancellationException) {

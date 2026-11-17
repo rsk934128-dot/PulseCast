@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -92,10 +93,11 @@ private enum class PulseTab(
 fun AppNavigation() {
     val auth = Firebase.auth
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
-    val user = currentUser
+    var authRefreshTick by remember { mutableIntStateOf(0) }
+    val user = remember(currentUser, authRefreshTick) { currentUser ?: auth.currentUser }
 
     if (user == null) {
-        AuthScreen(onAuthSuccess = {})
+        AuthScreen(onAuthSuccess = { authRefreshTick++ })
     } else {
         key(user.uid) {
             PulseCastMainShell(

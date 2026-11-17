@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -127,6 +128,11 @@ fun MessagingScreen(
             viewModel = viewModel,
             onSelectChat = { thread -> viewModel.selectChat(thread.id) },
             onNewChatClick = { showNewChatDialog = true },
+            onStartDirectChat = { creator -> viewModel.startOrOpenDirectChat(creator) },
+            onCallCreator = { creator, callType ->
+                viewModel.startCall(callType, targetCreator = creator)
+                onNavigateToCall()
+            },
             modifier = modifier
         )
     }
@@ -464,7 +470,15 @@ private fun NewChatDialog(
     onCreate: (title: String, selectedCreators: List<CreatorProfile>) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
+    var search by remember { mutableStateOf("") }
     val selectedIds = remember { mutableStateListOf<String>() }
+    val filteredCreators = remember(creators, search) {
+        val q = search.trim().lowercase()
+        if (q.isEmpty()) creators
+        else creators.filter {
+            it.displayName.lowercase().contains(q) || it.handle.lowercase().contains(q)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -480,31 +494,46 @@ private fun NewChatDialog(
                     modifier = Modifier.fillMaxWidth().testTag("new_chat_title_input")
                 )
                 if (creators.isNotEmpty()) {
-                    Text("Invite Creators", style = MaterialTheme.typography.labelLarge)
-                    creators.take(6).forEach { creator ->
-                        val checked = creator.userId in selectedIds
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (checked) selectedIds.remove(creator.userId)
-                                    else selectedIds.add(creator.userId)
-                                },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = checked,
-                                onCheckedChange = {
-                                    if (it) selectedIds.add(creator.userId)
-                                    else selectedIds.remove(creator.userId)
-                                }
-                            )
-                            Text("${creator.displayName} (@${creator.handle})", style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        label = { Text("Find Account / Creator") },
+                        placeholder = { Text("Search name or @handle") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("new_chat_people_search")
+                    )
+                    Text("Accounts (${filteredCreators.size})", style = MaterialTheme.typography.labelLarge)
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        items(filteredCreators, key = { it.userId }) { creator ->
+                            val checked = creator.userId in selectedIds
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (checked) selectedIds.remove(creator.userId)
+                                        else selectedIds.add(creator.userId)
+                                    },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        if (it) selectedIds.add(creator.userId)
+                                        else selectedIds.remove(creator.userId)
+                                    }
+                                )
+                                Text("${creator.displayName} (@${creator.handle})", style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
                     }
                 } else {
                     Text(
-                        text = "No other creators online yet — create a Studio Notes room or share a room code once collaborators sign in.",
+                        text = "No other accounts signed in yet — create a Studio Notes room or wait for another account to sign in.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
