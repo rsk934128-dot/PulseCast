@@ -77,9 +77,34 @@ jobs:
             cp .env.example .env
           fi
 
-      - name: Decode repository debug keystore
+      - name: Prepare debug keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 || vars.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
+          rm -f debug.keystore
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore || true
+          elif [ -f debug.keystore.base64 ]; then
+            tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore || true
+          fi
+
+          if ! keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null 2>&1; then
+            echo "::warning::Repository debug.keystore.base64 could not be read as a valid keystore; generating a fresh debug.keystore for this build. Note: for Google Sign-In to work with a newly generated debug keystore, register its SHA-1 below in Firebase Console or provide the original debug.keystore.base64 via the DEBUG_KEYSTORE_BASE64 secret."
+            rm -f debug.keystore
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storetype PKCS12 \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1:|SHA256:" || true
+          else
+            echo "Verified debug.keystore successfully."
+          fi
 
       - name: Ensure app/google-services.json is present
         env:
