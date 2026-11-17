@@ -104,3 +104,16 @@ data class CallSession(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
+
+@IgnoreExtraProperties
+data class AdminRecord(
+    @DocumentId val id: String = "",
+    val userId: String = "",
+    val displayName: String = "",
+    val email: String = "",
+    val role: String = "moderator",
+    val grantedBy: String = "",
+    @ServerTimestamp val createdAt: Timestamp? = null,
+    @ServerTimestamp val updatedAt: Timestamp? = null
+)
+

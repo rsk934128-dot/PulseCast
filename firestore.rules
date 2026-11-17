@@ -11,6 +11,16 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        ('email' in request.auth.token &&
+         request.auth.token.email == 'rsk755734@gmail.com' &&
+         'email_verified' in request.auth.token &&
+         request.auth.token.email_verified == true)
+      );
+    }
+
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -34,7 +44,41 @@ service cloud.firestore {
              (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() >= 1 && listVal[0].size() <= 128));
     }
 
-    // 1. Private User Accounts (PII isolated per UID)
+    // 0. Admin & Moderator Registry
+    function isValidAdminRecord(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.email is string && data.email.size() <= 254 &&
+             data.role is string && data.role in ['super_admin', 'moderator'] &&
+             data.grantedBy is string && data.grantedBy.size() >= 1 && data.grantedBy.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+
+      allow create: if isAdmin() &&
+                       isValidId(adminId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'email', 'role', 'grantedBy', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'role', 'grantedBy', 'createdAt', 'updatedAt']) &&
+                       isValidAdminRecord(incoming()) &&
+                       incoming().userId == adminId &&
+                       incoming().grantedBy == request.auth.uid;
+
+      allow update: if isAdmin() &&
+                       isValidId(adminId) &&
+                       isValidAdminRecord(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().grantedBy == existing().grantedBy &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'role', 'updatedAt']);
+
+      allow delete: if isAdmin() && isValidId(adminId) && adminId != request.auth.uid;
+    }
+
+    // 1. Private User Accounts (PII isolated per UID or Admin)
     function isValidUserAccount(data) {
       return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
              data.email is string && data.email.size() <= 254 &&
@@ -47,7 +91,8 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get, list: if isSignedIn() && request.auth.uid == userId;
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(userId) &&
@@ -59,7 +104,7 @@ service cloud.firestore {
 
       allow update: if isSignedIn() &&
                        isValidId(userId) &&
-                       request.auth.uid == userId &&
+                       (request.auth.uid == userId || isAdmin()) &&
                        isValidUserAccount(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
@@ -82,7 +127,7 @@ service cloud.firestore {
 
     match /creators/{creatorId} {
       allow get: if isSignedIn() && isValidId(creatorId);
-      allow list: if isSignedIn() && resource.data.isDiscoverable == true;
+      allow list: if isSignedIn() && (resource.data.isDiscoverable == true || isAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(creatorId) &&
@@ -94,13 +139,13 @@ service cloud.firestore {
 
       allow update: if isSignedIn() &&
                        isValidId(creatorId) &&
-                       request.auth.uid == creatorId &&
+                       (request.auth.uid == creatorId || isAdmin()) &&
                        isValidCreatorProfile(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'handle', 'bio', 'status', 'isDiscoverable', 'updatedAt']);
 
-      allow delete: if isSignedIn() && isValidId(creatorId) && request.auth.uid == creatorId;
+      allow delete: if isSignedIn() && isValidId(creatorId) && (request.auth.uid == creatorId || isAdmin());
     }
 
     // 3. Video Publishing Feed + Likes + Comments
@@ -130,8 +175,8 @@ service cloud.firestore {
     }
 
     match /videos/{videoId} {
-      allow get: if isSignedIn() && isValidId(videoId) && (resource.data.visibility == 'public' || resource.data.authorId == request.auth.uid);
-      allow list: if isSignedIn() && (resource.data.visibility == 'public' || resource.data.authorId == request.auth.uid);
+      allow get: if isSignedIn() && isValidId(videoId) && (resource.data.visibility == 'public' || resource.data.authorId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.visibility == 'public' || resource.data.authorId == request.auth.uid || isAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(videoId) &&
@@ -147,7 +192,7 @@ service cloud.firestore {
                        isValidVideo(incoming()) &&
                        incoming().authorId == existing().authorId &&
                        incoming().createdAt == existing().createdAt && (
-                         (existing().authorId == request.auth.uid &&
+                         ((existing().authorId == request.auth.uid || isAdmin()) &&
                           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'visibility', 'updatedAt'])) ||
                          (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']) &&
                           incoming().likesCount == existing().likesCount + 1 &&
@@ -160,7 +205,7 @@ service cloud.firestore {
                           incoming().commentsCount == existing().commentsCount + 1)
                        );
 
-      allow delete: if isSignedIn() && isValidId(videoId) && existing().authorId == request.auth.uid;
+      allow delete: if isSignedIn() && isValidId(videoId) && (existing().authorId == request.auth.uid || isAdmin());
 
       match /likes/{userId} {
         allow get: if isSignedIn() && isValidId(videoId) && isValidId(userId) && request.auth.uid == userId;
@@ -195,7 +240,7 @@ service cloud.firestore {
                          exists(/databases/$(database)/documents/videos/$(videoId));
 
         allow update: if false;
-        allow delete: if isSignedIn() && isValidId(videoId) && isValidId(commentId) && existing().authorId == request.auth.uid;
+        allow delete: if isSignedIn() && isValidId(videoId) && isValidId(commentId) && (existing().authorId == request.auth.uid || isAdmin());
       }
     }
 
@@ -292,8 +337,8 @@ service cloud.firestore {
     }
 
     match /call_sessions/{callId} {
-      allow get: if isSignedIn() && isValidId(callId) && ((request.auth.uid in resource.data.participantIds) || resource.data.status != 'ended');
-      allow list: if isSignedIn() && (request.auth.uid in resource.data.participantIds);
+      allow get: if isSignedIn() && isValidId(callId) && ((request.auth.uid in resource.data.participantIds) || resource.data.status != 'ended' || isAdmin());
+      allow list: if isSignedIn() && ((request.auth.uid in resource.data.participantIds) || isAdmin());
 
       allow create: if isSignedIn() &&
                        isValidId(callId) &&
@@ -307,18 +352,21 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                        isValidId(callId) &&
                        isValidCallSession(incoming()) &&
-                       existing().status != 'ended' &&
                        incoming().hostId == existing().hostId &&
                        incoming().roomCode == existing().roomCode &&
                        incoming().createdAt == existing().createdAt && (
-                         (incoming().diff(existing()).affectedKeys().hasOnly(['participantIds', 'participantNames', 'status', 'updatedAt']) &&
-                          (request.auth.uid in incoming().participantIds) &&
-                          incoming().status == 'active') ||
-                         ((request.auth.uid in existing().participantIds) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'durationSec', 'updatedAt']))
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'durationSec', 'updatedAt'])) ||
+                         (existing().status != 'ended' && (
+                           (incoming().diff(existing()).affectedKeys().hasOnly(['participantIds', 'participantNames', 'status', 'updatedAt']) &&
+                            (request.auth.uid in incoming().participantIds) &&
+                            incoming().status == 'active') ||
+                           ((request.auth.uid in existing().participantIds) &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'durationSec', 'updatedAt']))
+                         ))
                        );
 
-      allow delete: if isSignedIn() && isValidId(callId) && existing().hostId == request.auth.uid;
+      allow delete: if isSignedIn() && isValidId(callId) && (existing().hostId == request.auth.uid || isAdmin());
     }
   }
 }

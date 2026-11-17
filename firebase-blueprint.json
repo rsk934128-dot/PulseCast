@@ -130,6 +130,21 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["hostId", "hostName", "roomCode", "callType", "status", "participantIds", "durationSec", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Authorized admin/moderator role entry isolated to admins and verified owners.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["super_admin", "moderator"] },
+        "grantedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "displayName", "email", "role", "grantedBy", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -164,6 +179,10 @@
     "/call_sessions/{callId}": {
       "schema": { "$ref": "#/entities/CallSession" },
       "description": "Audio/video calling sessions and logs"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Role-based access control records for platform administrators"
     }
   }
 }

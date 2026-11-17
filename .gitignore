@@ -16,5 +16,11 @@
 local.properties
 .env
 debug.keystore
+*.jks
+*.keystore
+release-assets/
 *-debug.log
-
+web/node_modules/
+web/dist/
+web/.env
+web/.env.local

@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -50,6 +52,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.auth.authStateFlow
 import com.example.data.PulseCastRepository
 import com.example.ui.PulseCastViewModel
+import com.example.ui.screens.AdminPanelScreen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.CallsScreen
 import com.example.ui.screens.MessagingScreen
@@ -81,7 +84,8 @@ private enum class PulseTab(
     FEED("Feed", Icons.Filled.PlayCircle, Icons.Outlined.PlayCircle, "nav_feed"),
     CHATS("Chats", Icons.AutoMirrored.Filled.Chat, Icons.AutoMirrored.Outlined.Chat, "nav_chats"),
     CALLS("Calls", Icons.Filled.Call, Icons.Outlined.Call, "nav_calls"),
-    STUDIO("Studio", Icons.Filled.Person, Icons.Outlined.Person, "nav_studio")
+    STUDIO("Studio", Icons.Filled.Person, Icons.Outlined.Person, "nav_studio"),
+    ADMIN("Admin", Icons.Filled.AdminPanelSettings, Icons.Outlined.AdminPanelSettings, "nav_admin")
 }
 
 @Composable
@@ -97,7 +101,8 @@ fun AppNavigation() {
             PulseCastMainShell(
                 currentUserId = user.uid,
                 displayName = user.displayName ?: "PulseCast Creator",
-                email = user.email ?: ""
+                email = user.email ?: "",
+                isEmailVerified = user.isEmailVerified
             )
         }
     }
@@ -108,7 +113,8 @@ fun AppNavigation() {
 private fun PulseCastMainShell(
     currentUserId: String,
     displayName: String,
-    email: String
+    email: String,
+    isEmailVerified: Boolean
 ) {
     val viewModel: PulseCastViewModel = viewModel(
         key = currentUserId,
@@ -121,14 +127,26 @@ private fun PulseCastMainShell(
                     repository = PulseCastRepository(db),
                     currentUserId = currentUserId,
                     currentUserName = displayName,
-                    currentUserEmail = email
+                    currentUserEmail = email,
+                    currentUserEmailVerified = isEmailVerified
                 )
             }
         }
     )
 
+    val isAdmin by viewModel.isAdmin.collectAsStateWithLifecycle()
+    val visibleTabs = remember(isAdmin) {
+        if (isAdmin) PulseTab.entries else PulseTab.entries.filter { it != PulseTab.ADMIN }
+    }
+
     var currentTab by rememberSaveable { mutableStateOf(PulseTab.FEED) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(isAdmin) {
+        if (!isAdmin && currentTab == PulseTab.ADMIN) {
+            currentTab = PulseTab.FEED
+        }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.snackbarEvents.collect { message ->
@@ -150,6 +168,7 @@ private fun PulseCastMainShell(
                                 PulseTab.CHATS -> "Messages"
                                 PulseTab.CALLS -> "Audio & Video Calls"
                                 PulseTab.STUDIO -> "Creator Studio"
+                                PulseTab.ADMIN -> "Admin Console"
                             },
                             style = MaterialTheme.typography.headlineSmall
                         )
@@ -159,7 +178,7 @@ private fun PulseCastMainShell(
             bottomBar = {
                 if (!useRail) {
                     NavigationBar {
-                        PulseTab.entries.forEach { tab ->
+                        visibleTabs.forEach { tab ->
                             val selected = currentTab == tab
                             NavigationBarItem(
                                 selected = selected,
@@ -185,7 +204,7 @@ private fun PulseCastMainShell(
             ) {
                 if (useRail) {
                     NavigationRail {
-                        PulseTab.entries.forEach { tab ->
+                        visibleTabs.forEach { tab ->
                             val selected = currentTab == tab
                             NavigationRailItem(
                                 selected = selected,
@@ -216,6 +235,11 @@ private fun PulseCastMainShell(
                         onSignedOut = {},
                         modifier = Modifier.weight(1f)
                     )
+                    PulseTab.ADMIN -> if (isAdmin) {
+                        AdminPanelScreen(viewModel = viewModel, modifier = Modifier.weight(1f))
+                    } else {
+                        VideoFeedScreen(viewModel = viewModel, modifier = Modifier.weight(1f))
+                    }
                 }
             }
         }

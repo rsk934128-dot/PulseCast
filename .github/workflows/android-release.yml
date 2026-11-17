@@ -1,0 +1,143 @@
+name: Android APK Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g., v1.0.0). Leave blank to auto-generate v1.0.<run_number>.'
+        required: false
+        default: ''
+      run_tests:
+        description: 'Run Android unit tests before packaging'
+        type: boolean
+        required: false
+        default: true
+      prerelease:
+        description: 'Mark GitHub Release as pre-release'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build & Publish Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Accept Android SDK licenses
+        run: |
+          SDK_MANAGER="$(command -v sdkmanager || find "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/cmdline-tools" -name sdkmanager 2>/dev/null | head -n 1)"
+          if [ -n "$SDK_MANAGER" ]; then
+            yes | "$SDK_MANAGER" --licenses >/dev/null 2>&1 || true
+          fi
+
+      - name: Resolve release version & tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            TAG="${{ inputs.release_tag }}"
+          else
+            TAG="v1.0.${{ github.run_number }}"
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "VERSION_LABEL=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Prepare .env for Secrets Gradle Plugin
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
+        run: |
+          if [ -n "$ENV_FILE_CONTENT" ]; then
+            printf '%s\n' "$ENV_FILE_CONTENT" > .env
+          elif [ ! -f .env ] && [ -f .env.example ]; then
+            cp .env.example .env
+          fi
+
+      - name: Decode repository debug keystore
+        run: |
+          tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
+
+      - name: Run unit tests
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_tests }}
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK (Firebase & Google Sign-In ready)
+        run: |
+          gradle :app:assembleDebug --no-daemon
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-debug.apk "release-assets/PulseCast-${VERSION_LABEL}-debug.apk"
+
+      - name: Check optional production release signing secrets
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "HAS_RELEASE_KEYSTORE=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_RELEASE_KEYSTORE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Signed Release APK & AAB
+        if: ${{ env.HAS_RELEASE_KEYSTORE == 'true' }}
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+        run: |
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > "$KEYSTORE_PATH"
+          gradle :app:assembleRelease :app:bundleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "release-assets/PulseCast-${VERSION_LABEL}-release.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "release-assets/PulseCast-${VERSION_LABEL}-release.aab"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Clean up temporary keystores and env
+        if: always()
+        run: rm -f debug.keystore my-upload-key.jks .env
+
+      - name: Upload workflow build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulsecast-${{ env.RELEASE_TAG }}-packages
+          path: release-assets/*
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: PulseCast ${{ env.RELEASE_TAG }}
+          generate_release_notes: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          files: release-assets/*

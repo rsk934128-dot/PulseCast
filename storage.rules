@@ -17,7 +17,10 @@ service firebase.storage {
                                request.resource.size <= 250 * 1024 * 1024 &&
                                request.resource.contentType.matches('video/.*');
 
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow delete: if request.auth != null && (
+        request.auth.uid == userId ||
+        (request.auth.token.email == 'rsk755734@gmail.com' && request.auth.token.email_verified == true)
+      );
     }
   }
 }

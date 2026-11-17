@@ -677,4 +677,157 @@ class PulseCastRepository(
             throw e
         }
     }
+
+    // --- Admin Panel & Moderation ---
+
+    fun observeIsAdminDoc(uid: String): Flow<Boolean> = flow {
+        val docRef = db.collection("admins").document(uid)
+        emitAll(docRef.snapshots().map { it.exists() })
+    }
+
+    fun observeAdmins(): Flow<List<AdminRecord>> = flow {
+        val colRef = db.collection("admins")
+        emitAll(
+            colRef.snapshots().map { snap ->
+                snap.toObjects(AdminRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.displayName.lowercase() }
+            }
+        )
+    }
+
+    fun observeAllUsersForAdmin(): Flow<List<UserAccount>> = flow {
+        val colRef = db.collection("users")
+        emitAll(
+            colRef.snapshots().map { snap ->
+                snap.toObjects(UserAccount::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.displayName.lowercase() }
+            }
+        )
+    }
+
+    fun observeAllCreatorsForAdmin(): Flow<List<CreatorProfile>> = flow {
+        val colRef = db.collection("creators")
+        emitAll(
+            colRef.snapshots().map { snap ->
+                snap.toObjects(CreatorProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.displayName.lowercase() }
+            }
+        )
+    }
+
+    fun observeAllVideosForAdmin(): Flow<List<PublishedVideo>> = flow {
+        val colRef = db.collection("videos")
+        emitAll(
+            colRef.snapshots().map { snap ->
+                snap.toObjects(PublishedVideo::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+            }
+        )
+    }
+
+    fun observeAllCallSessionsForAdmin(): Flow<List<CallSession>> = flow {
+        val colRef = db.collection("call_sessions")
+        emitAll(
+            colRef.snapshots().map { snap ->
+                snap.toObjects(CallSession::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+            }
+        )
+    }
+
+    suspend fun adminUpdateVideoVisibility(videoId: String, visibility: String): Result<Unit> = runCatching {
+        val docRef = db.collection("videos").document(videoId)
+        val safeVisibility = if (visibility == "private") "private" else "public"
+        try {
+            docRef.update(
+                mapOf(
+                    "visibility" to safeVisibility,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun adminUpdateCreatorModeration(
+        creatorId: String,
+        isDiscoverable: Boolean,
+        status: String
+    ): Result<Unit> = runCatching {
+        val docRef = db.collection("creators").document(creatorId)
+        val safeStatus = if (status in listOf("online", "in_call", "studio", "away")) status else "online"
+        try {
+            docRef.update(
+                mapOf(
+                    "isDiscoverable" to isDiscoverable,
+                    "status" to safeStatus,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun adminDeleteCallSession(callId: String): Result<Unit> = runCatching {
+        val docRef = db.collection("call_sessions").document(callId)
+        try {
+            docRef.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun adminGrantRole(
+        targetUid: String,
+        displayName: String,
+        email: String,
+        role: String,
+        grantedByUid: String
+    ): Result<Unit> = runCatching {
+        val cleanUid = targetUid.trim()
+        require(cleanUid.isNotEmpty() && cleanUid.length <= 128) { "Valid user UID is required." }
+        val safeRole = if (role == "super_admin") "super_admin" else "moderator"
+        val docRef = db.collection("admins").document(cleanUid)
+        val payload = mapOf(
+            "userId" to cleanUid,
+            "displayName" to displayName.trim().ifBlank { "Studio Moderator" }.take(60),
+            "email" to email.trim().take(254),
+            "role" to safeRole,
+            "grantedBy" to grantedByUid,
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        try {
+            docRef.set(payload).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun adminRevokeRole(targetUid: String): Result<Unit> = runCatching {
+        val docRef = db.collection("admins").document(targetUid)
+        try {
+            docRef.delete().await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path)
+            throw e
+        }
+    }
 }
+

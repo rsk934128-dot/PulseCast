@@ -12,16 +12,13 @@ const DATABASE_ID = "ai-studio-android-pulsecas-9e6b52a5-7c12-482d-961e-c26729bf
 const ALICE_UID = "alice_uid_123";
 const BOB_UID = "bob_uid_456";
 const CHARLIE_UID = "charlie_uid_789";
+const SUPER_ADMIN_UID = "admin_uid_001";
+const ADMIN_EMAIL = "rsk755734@gmail.com";
 
 const [emulatorHost, emulatorPortStr] = (
   process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8085"
 ).split(":");
 const emulatorPort = parseInt(emulatorPortStr, 10);
-
-function serverTs() {
-  const { serverTimestamp } = require("firebase/firestore");
-  return serverTimestamp();
-}
 
 before(async () => {
   const rules = fs.readFileSync("./firestore.rules", "utf8");
@@ -58,12 +55,13 @@ test("Unauthenticated user: cannot read or write any collection", async () => {
   await assertFails(unauthDb.collection("videos").where("visibility", "==", "public").get());
   await assertFails(unauthDb.collection("chats").where("participantIds", "array-contains", ALICE_UID).get());
   await assertFails(unauthDb.collection("call_sessions").where("participantIds", "array-contains", ALICE_UID).get());
+  await assertFails(unauthDb.collection("admins").doc(ALICE_UID).get());
 });
 
 test("Users PII isolation: owner can create/read own doc, cross-user read/write fails", async () => {
   const aliceDb = getDb(testEnv.authenticatedContext(ALICE_UID));
   const bobDb = getDb(testEnv.authenticatedContext(BOB_UID));
-  const now = new Date();
+  const now = new Date(Date.now() - 1000);
 
   await assertSucceeds(
     aliceDb.collection("users").doc(ALICE_UID).set({
@@ -82,7 +80,7 @@ test("Users PII isolation: owner can create/read own doc, cross-user read/write 
   await assertFails(
     aliceDb.collection("users").doc(ALICE_UID).update({
       isAdmin: true,
-      updatedAt: new Date(),
+      updatedAt: new Date(Date.now() - 500),
     })
   );
 
@@ -102,7 +100,7 @@ test("Users PII isolation: owner can create/read own doc, cross-user read/write 
 test("Creators directory: aligned list query succeeds, unfiltered list fails", async () => {
   const aliceDb = getDb(testEnv.authenticatedContext(ALICE_UID));
   const bobDb = getDb(testEnv.authenticatedContext(BOB_UID));
-  const now = new Date();
+  const now = new Date(Date.now() - 1000);
 
   await assertSucceeds(
     aliceDb.collection("creators").doc(ALICE_UID).set({
@@ -126,7 +124,7 @@ test("Creators directory: aligned list query succeeds, unfiltered list fails", a
 test("Videos feed: atomic like/unlike and comments enforce rules, private videos isolated", async () => {
   const aliceDb = getDb(testEnv.authenticatedContext(ALICE_UID));
   const bobDb = getDb(testEnv.authenticatedContext(BOB_UID));
-  const now = new Date();
+  const now = new Date(Date.now() - 1000);
 
   await assertSucceeds(
     aliceDb.collection("videos").doc("vid_1").set({
@@ -193,7 +191,7 @@ test("Chats & messages: participant isolation enforced", async () => {
   const aliceDb = getDb(testEnv.authenticatedContext(ALICE_UID));
   const bobDb = getDb(testEnv.authenticatedContext(BOB_UID));
   const charlieDb = getDb(testEnv.authenticatedContext(CHARLIE_UID));
-  const now = new Date();
+  const now = new Date(Date.now() - 1000);
 
   await assertSucceeds(
     aliceDb.collection("chats").doc("chat_1").set({
@@ -249,7 +247,7 @@ test("Chats & messages: participant isolation enforced", async () => {
 test("Call sessions: join active room succeeds, terminal ended lock prevents further edits", async () => {
   const aliceDb = getDb(testEnv.authenticatedContext(ALICE_UID));
   const bobDb = getDb(testEnv.authenticatedContext(BOB_UID));
-  const now = new Date();
+  const now = new Date(Date.now() - 1000);
 
   await assertSucceeds(
     aliceDb.collection("call_sessions").doc("PULSE-8842").set({
@@ -293,3 +291,122 @@ test("Call sessions: join active room succeeds, terminal ended lock prevents fur
     })
   );
 });
+
+test("Admin RBAC: email spoofing fails, verified admin can moderate & manage admins", async () => {
+  const now = new Date(Date.now() - 2000);
+  const aliceDb = getDb(testEnv.authenticatedContext(ALICE_UID));
+  const spoofedAdminDb = getDb(
+    testEnv.authenticatedContext("spoof_uid", {
+      email: ADMIN_EMAIL,
+      email_verified: false,
+    })
+  );
+  const adminDb = getDb(
+    testEnv.authenticatedContext(SUPER_ADMIN_UID, {
+      email: ADMIN_EMAIL,
+      email_verified: true,
+    })
+  );
+  const bobDb = getDb(testEnv.authenticatedContext(BOB_UID));
+
+  // Alice creates her account, creator profile, private video, and active call
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      email: "alice@example.com",
+      displayName: "Alice",
+      pushCallAlerts: true,
+      pushMessageAlerts: true,
+      hdVideoDefault: true,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("creators").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      handle: "alice_creator",
+      isDiscoverable: true,
+      status: "online",
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("videos").doc("alice_priv").set({
+      authorId: ALICE_UID,
+      authorName: "Alice",
+      title: "Private Review",
+      category: "Studio",
+      visibility: "private",
+      likesCount: 0,
+      commentsCount: 0,
+      durationSec: 45,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Normal user can probe own admin doc without permission error, but cannot list admins or self-promote
+  await assertSucceeds(aliceDb.collection("admins").doc(ALICE_UID).get());
+  await assertFails(aliceDb.collection("admins").get());
+  await assertFails(
+    aliceDb.collection("admins").doc(ALICE_UID).set({
+      userId: ALICE_UID,
+      displayName: "Alice",
+      email: "alice@example.com",
+      role: "moderator",
+      grantedBy: ALICE_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Email spoofing (email_verified: false) MUST be rejected from admin reads/writes
+  await assertFails(spoofedAdminDb.collection("admins").get());
+  await assertFails(spoofedAdminDb.collection("videos").get());
+  await assertFails(spoofedAdminDb.collection("users").get());
+
+  // Verified bootstrapped admin can list all users, creators, and private videos
+  await assertSucceeds(adminDb.collection("users").get());
+  await assertSucceeds(adminDb.collection("creators").get());
+  await assertSucceeds(adminDb.collection("videos").get());
+  await assertSucceeds(adminDb.collection("call_sessions").get());
+
+  // Admin can moderate creator discoverability and video visibility
+  await assertSucceeds(
+    adminDb.collection("creators").doc(ALICE_UID).update({
+      isDiscoverable: false,
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertSucceeds(
+    adminDb.collection("videos").doc("alice_priv").update({
+      visibility: "public",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Admin grants moderator role to Bob
+  await assertSucceeds(
+    adminDb.collection("admins").doc(BOB_UID).set({
+      userId: BOB_UID,
+      displayName: "Bob Mod",
+      email: "bob@example.com",
+      role: "moderator",
+      grantedBy: SUPER_ADMIN_UID,
+      createdAt: now,
+      updatedAt: now,
+    })
+  );
+
+  // Bob (now in /admins/{BOB_UID}) can list videos & delete moderated video
+  await assertSucceeds(bobDb.collection("videos").get());
+  await assertSucceeds(bobDb.collection("videos").doc("alice_priv").delete());
+
+  // Admin can revoke Bob's role
+  await assertSucceeds(adminDb.collection("admins").doc(BOB_UID).delete());
+  await assertFails(bobDb.collection("videos").get());
+});
+

@@ -4,6 +4,9 @@
     <string name="tab_chats">Chats</string>
     <string name="tab_calls">Calls</string>
     <string name="tab_studio">Studio</string>
+    <string name="tab_admin">Admin</string>
+    <string name="admin_console_title">Admin Console</string>
+    <string name="admin_console_subtitle">Moderation, creator directory, call rooms &amp; RBAC access control</string>
     <string name="sign_in_google">Sign in with Google</string>
     <string name="sign_out">Sign out</string>
     <string name="auth_connecting">Signing in with Google…</string>

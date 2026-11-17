@@ -4,6 +4,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.AdminRecord
 import com.example.data.CallSession
 import com.example.data.ChatMessage
 import com.example.data.ChatThread
@@ -49,7 +50,8 @@ class PulseCastViewModel(
     private val repository: PulseCastRepository,
     val currentUserId: String,
     val currentUserName: String,
-    val currentUserEmail: String
+    val currentUserEmail: String,
+    val currentUserEmailVerified: Boolean = false
 ) : ViewModel() {
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -128,6 +130,55 @@ class PulseCastViewModel(
             if (callId.isNullOrBlank()) flowOf(null)
             else repository.observeCallSession(callId).catch { emit(null) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
+    private val isBootstrappedSuperAdmin: Boolean =
+        currentUserEmail.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) && currentUserEmailVerified
+
+    val isAdmin: StateFlow<Boolean> =
+        repository.observeIsAdminDoc(currentUserId)
+            .map { hasDoc -> hasDoc || isBootstrappedSuperAdmin }
+            .catch { emit(isBootstrappedSuperAdmin) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), isBootstrappedSuperAdmin)
+
+    val adminVideosState: StateFlow<UiState<List<PublishedVideo>>> =
+        isAdmin.flatMapLatest { admin ->
+            if (!admin) flowOf(UiState.Success(emptyList()))
+            else repository.observeAllVideosForAdmin()
+                .map<List<PublishedVideo>, UiState<List<PublishedVideo>>> { UiState.Success(it) }
+                .catch { error -> emit(UiState.Error(unwrapError(error, "Failed to load all videos"))) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
+
+    val adminCreatorsState: StateFlow<UiState<List<CreatorProfile>>> =
+        isAdmin.flatMapLatest { admin ->
+            if (!admin) flowOf(UiState.Success(emptyList()))
+            else repository.observeAllCreatorsForAdmin()
+                .map<List<CreatorProfile>, UiState<List<CreatorProfile>>> { UiState.Success(it) }
+                .catch { error -> emit(UiState.Error(unwrapError(error, "Failed to load all creators"))) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
+
+    val adminUsersState: StateFlow<UiState<List<UserAccount>>> =
+        isAdmin.flatMapLatest { admin ->
+            if (!admin) flowOf(UiState.Success(emptyList()))
+            else repository.observeAllUsersForAdmin()
+                .map<List<UserAccount>, UiState<List<UserAccount>>> { UiState.Success(it) }
+                .catch { error -> emit(UiState.Error(unwrapError(error, "Failed to load users"))) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
+
+    val adminCallsState: StateFlow<UiState<List<CallSession>>> =
+        isAdmin.flatMapLatest { admin ->
+            if (!admin) flowOf(UiState.Success(emptyList()))
+            else repository.observeAllCallSessionsForAdmin()
+                .map<List<CallSession>, UiState<List<CallSession>>> { UiState.Success(it) }
+                .catch { error -> emit(UiState.Error(unwrapError(error, "Failed to load call sessions"))) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
+
+    val adminsListState: StateFlow<UiState<List<AdminRecord>>> =
+        isAdmin.flatMapLatest { admin ->
+            if (!admin) flowOf(UiState.Success(emptyList()))
+            else repository.observeAdmins()
+                .map<List<AdminRecord>, UiState<List<AdminRecord>>> { UiState.Success(it) }
+                .catch { error -> emit(UiState.Error(unwrapError(error, "Failed to load admins"))) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
 
     init {
         viewModelScope.launch {
@@ -400,6 +451,69 @@ class PulseCastViewModel(
         }
     }
 
+    // --- Admin Actions ---
+
+    fun adminToggleVideoVisibility(video: PublishedVideo) {
+        val nextVisibility = if (video.visibility == "public") "private" else "public"
+        viewModelScope.launch {
+            repository.adminUpdateVideoVisibility(video.id, nextVisibility)
+                .onSuccess { _snackbarEvents.tryEmit("Video moved to $nextVisibility") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update visibility") }
+        }
+    }
+
+    fun adminDeleteVideo(videoId: String) {
+        viewModelScope.launch {
+            repository.deleteVideo(videoId)
+                .onSuccess { _snackbarEvents.tryEmit("Video deleted by admin") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Admin delete failed") }
+        }
+    }
+
+    fun adminSetCreatorModeration(creatorId: String, isDiscoverable: Boolean, status: String) {
+        viewModelScope.launch {
+            repository.adminUpdateCreatorModeration(creatorId, isDiscoverable, status)
+                .onSuccess { _snackbarEvents.tryEmit("Creator moderation updated") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update creator") }
+        }
+    }
+
+    fun adminForceEndCall(callSession: CallSession) {
+        viewModelScope.launch {
+            repository.endCallSession(callSession.id, callSession.durationSec)
+                .onSuccess { _snackbarEvents.tryEmit("Room ${callSession.roomCode} ended") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to end room") }
+        }
+    }
+
+    fun adminDeleteCallSession(callId: String) {
+        viewModelScope.launch {
+            repository.adminDeleteCallSession(callId)
+                .onSuccess { _snackbarEvents.tryEmit("Call log removed") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to remove call log") }
+        }
+    }
+
+    fun adminGrantRole(targetUid: String, displayName: String, email: String, role: String) {
+        viewModelScope.launch {
+            repository.adminGrantRole(targetUid, displayName, email, role, currentUserId)
+                .onSuccess { _snackbarEvents.tryEmit("Granted $role access") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to grant admin role") }
+        }
+    }
+
+    fun adminRevokeRole(targetUid: String) {
+        if (targetUid == currentUserId) {
+            _snackbarEvents.tryEmit("You cannot revoke your own active admin role.")
+            return
+        }
+        viewModelScope.launch {
+            repository.adminRevokeRole(targetUid)
+                .onSuccess { _snackbarEvents.tryEmit("Admin role revoked") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to revoke admin role") }
+        }
+    }
+
     private fun unwrapError(error: Throwable, fallback: String): String {
         val firestoreError = generateSequence(error) { it.cause }
             .filterIsInstance<FirebaseFirestoreException>()
@@ -413,5 +527,6 @@ class PulseCastViewModel(
     private companion object {
         const val TAG = "PulseCastVM"
         const val STOP_TIMEOUT_MS = 5000L
+        const val BOOTSTRAPPED_ADMIN_EMAIL = "rsk755734@gmail.com"
     }
 }
