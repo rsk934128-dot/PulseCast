@@ -170,6 +170,14 @@ jobs:
           mkdir -p release-assets
           cp app/build/outputs/apk/debug/app-debug.apk "release-assets/PulseCast-${VERSION_LABEL}-debug.apk"
 
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PulseCast-${{ env.RELEASE_TAG }}-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Check optional production release signing secrets
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -208,12 +216,13 @@ jobs:
             rm -f app/google-services.json
           fi
 
-      - name: Upload Android APK build artifact
+      - name: Upload Signed Release APK artifact
+        if: ${{ env.HAS_RELEASE_KEYSTORE == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: PulseCast-${{ env.RELEASE_TAG }}-apk
-          path: release-assets/*.apk
-          if-no-files-found: error
+          name: PulseCast-${{ env.RELEASE_TAG }}-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Upload Android App Bundle (AAB) artifact
@@ -244,7 +253,7 @@ jobs:
             if compgen -G "release-assets/*.apk" > /dev/null; then
               echo "### Download APK"
               echo "- **Direct APK (GitHub Release):** [Open Release ${RELEASE_TAG}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
-              echo "- **Workflow Run Artifact:** Scroll down to the **Artifacts** section on this page and download \`PulseCast-${RELEASE_TAG}-apk\`."
+              echo "- **Workflow Run Artifact:** Scroll down to the **Artifacts** section on this page and download \`PulseCast-${RELEASE_TAG}-debug-apk\`."
               echo ""
               echo "### Generated Packages"
               echo '```text'
