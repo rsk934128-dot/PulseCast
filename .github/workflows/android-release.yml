@@ -208,11 +208,21 @@ jobs:
             rm -f app/google-services.json
           fi
 
-      - name: Upload workflow build artifacts
+      - name: Upload Android APK build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pulsecast-${{ env.RELEASE_TAG }}-packages
-          path: release-assets/*
+          name: PulseCast-${{ env.RELEASE_TAG }}-apk
+          path: release-assets/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android App Bundle (AAB) artifact
+        if: ${{ env.HAS_RELEASE_KEYSTORE == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PulseCast-${{ env.RELEASE_TAG }}-aab
+          path: release-assets/*.aab
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Publish GitHub Release
@@ -224,3 +234,23 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
           files: release-assets/*
+
+      - name: Write workflow run summary
+        if: always()
+        run: |
+          {
+            echo "## PulseCast Android Build (${RELEASE_TAG})"
+            echo ""
+            if compgen -G "release-assets/*.apk" > /dev/null; then
+              echo "### Download APK"
+              echo "- **Direct APK (GitHub Release):** [Open Release ${RELEASE_TAG}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
+              echo "- **Workflow Run Artifact:** Scroll down to the **Artifacts** section on this page and download \`PulseCast-${RELEASE_TAG}-apk\`."
+              echo ""
+              echo "### Generated Packages"
+              echo '```text'
+              ls -lh release-assets/
+              echo '```'
+            else
+              echo "Build did not produce an APK. Check the failed step logs above."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
