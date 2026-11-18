@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -57,12 +62,17 @@ import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.auth.signOutUser
+import com.example.data.CreatorProfile
 import com.example.data.PublishedVideo
+import com.example.data.isRecentlyOnline
+import com.example.media.encodeUriImageToBase64
 import com.example.ui.PulseCastViewModel
 import com.example.ui.UiState
 import com.example.ui.VideoUploadUiState
+import com.example.ui.components.AvatarPhotoLightboxDialog
 import com.google.firebase.Firebase
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.launch
 
 private enum class ProfileVideoFilter(val label: String, val tag: String) {
     ALL("All", "profile_filter_all"),
@@ -87,12 +97,36 @@ fun StudioProfileScreen(
     val comments by viewModel.selectedVideoComments.collectAsStateWithLifecycle()
     val isLiked by viewModel.isSelectedVideoLiked.collectAsStateWithLifecycle()
 
-    val photoUrl = remember(viewModel.currentUserId) {
+    val authPhotoUrl = remember(viewModel.currentUserId) {
         runCatching { Firebase.auth.currentUser?.photoUrl?.toString() }.getOrNull()
     }
 
-    val myCreator = remember(creatorsState, viewModel.currentUserId) {
-        (creatorsState as? UiState.Success)?.data?.firstOrNull { it.userId == viewModel.currentUserId }
+    val allCreators = remember(creatorsState) {
+        (creatorsState as? UiState.Success)?.data.orEmpty()
+    }
+    val myCreator = remember(allCreators, viewModel.currentUserId) {
+        allCreators.firstOrNull { it.userId == viewModel.currentUserId }
+    }
+    val otherCreators = remember(allCreators, viewModel.currentUserId) {
+        allCreators.filter { it.userId != viewModel.currentUserId }
+    }
+    val effectivePhotoUrl = myCreator?.photoUrl?.takeIf { it.isNotBlank() }
+        ?: userAccount?.photoUrl?.takeIf { it.isNotBlank() }
+        ?: authPhotoUrl
+    val effectiveAvatarBase64 = myCreator?.avatarBase64?.takeIf { it.isNotBlank() }
+        ?: userAccount?.avatarBase64?.takeIf { it.isNotBlank() }
+
+    val avatarPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val base64 = encodeUriImageToBase64(context, uri, maxDimension = 360, quality = 75)
+                if (base64 != null) {
+                    viewModel.updateProfilePhoto(base64)
+                }
+            }
+        }
     }
 
     var viewingVideoId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -139,7 +173,7 @@ fun StudioProfileScreen(
             email = userAccount?.email?.ifBlank { viewModel.currentUserEmail } ?: viewModel.currentUserEmail,
             initialBio = myCreator?.bio.orEmpty(),
             initialStatus = myCreator?.status ?: "online",
-            photoUrl = photoUrl,
+            photoUrl = effectivePhotoUrl,
             pushCalls = userAccount?.pushCallAlerts ?: true,
             pushMessages = userAccount?.pushMessageAlerts ?: true,
             hdVideo = userAccount?.hdVideoDefault ?: true,
@@ -159,9 +193,24 @@ fun StudioProfileScreen(
                 viewModel.deleteVideo(video.id) {}
             },
             onSignOut = {
-                signOutUser(credentialManager, scope, onSignOutComplete = onSignedOut)
+                signOutUser(
+                    credentialManager = credentialManager,
+                    scope = scope,
+                    onBeforeSignOut = { viewModel.markOfflineNow() },
+                    onSignOutComplete = onSignedOut
+                )
             },
-            modifier = modifier
+            modifier = modifier,
+            avatarBase64 = effectiveAvatarBase64,
+            isOnline = myCreator?.isRecentlyOnline() ?: (userAccount?.isRecentlyOnline() ?: true),
+            discoverableCreators = otherCreators,
+            onPickNewPhoto = {
+                avatarPickerLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onResetGooglePhoto = { viewModel.updateProfilePhoto(null) },
+            onViewCreatorProfile = { creator -> viewModel.openCreatorProfile(creator) }
         )
     }
 
@@ -231,7 +280,13 @@ fun StudioProfileContent(
     onVideoClick: (PublishedVideo) -> Unit,
     onDeleteVideo: (PublishedVideo) -> Unit,
     onSignOut: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    avatarBase64: String? = null,
+    isOnline: Boolean = true,
+    discoverableCreators: List<CreatorProfile> = emptyList(),
+    onPickNewPhoto: () -> Unit = {},
+    onResetGooglePhoto: () -> Unit = {},
+    onViewCreatorProfile: (CreatorProfile) -> Unit = {}
 ) {
     var displayName by remember(initialDisplayName) { mutableStateOf(initialDisplayName) }
     var handle by remember(initialHandle) { mutableStateOf(initialHandle) }
@@ -243,6 +298,7 @@ fun StudioProfileContent(
     var hdVideoState by remember(hdVideo) { mutableStateOf(hdVideo) }
 
     var isEditingProfile by rememberSaveable { mutableStateOf(false) }
+    var showPhotoLightbox by rememberSaveable { mutableStateOf(false) }
     var videoFilter by rememberSaveable { mutableStateOf(ProfileVideoFilter.ALL) }
     var pendingDeleteVideo by remember { mutableStateOf<PublishedVideo?>(null) }
 
@@ -256,6 +312,7 @@ fun StudioProfileContent(
     }
     val totalLikes = remember(allVideos) { allVideos.sumOf { it.likesCount } }
     val totalComments = remember(allVideos) { allVideos.sumOf { it.commentsCount } }
+    val nowMillis = remember(discoverableCreators) { System.currentTimeMillis() }
 
     Box(
         modifier = modifier.fillMaxSize(),
@@ -278,7 +335,11 @@ fun StudioProfileContent(
                     status = status,
                     photoUrl = photoUrl,
                     isEditing = isEditingProfile,
-                    onToggleEdit = { isEditingProfile = !isEditingProfile }
+                    onToggleEdit = { isEditingProfile = !isEditingProfile },
+                    avatarBase64 = avatarBase64,
+                    isOnline = isOnline,
+                    onAvatarClick = { showPhotoLightbox = true },
+                    onChangePhotoClick = onPickNewPhoto
                 )
             }
 
@@ -288,6 +349,16 @@ fun StudioProfileContent(
                     totalLikes = totalLikes,
                     totalComments = totalComments
                 )
+            }
+
+            if (discoverableCreators.isNotEmpty()) {
+                item {
+                    CreatorProfilesStrip(
+                        creators = discoverableCreators,
+                        nowMillis = nowMillis,
+                        onCreatorClick = onViewCreatorProfile
+                    )
+                }
             }
 
             item {
@@ -304,6 +375,34 @@ fun StudioProfileContent(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Text("Edit Creator Profile", style = MaterialTheme.typography.titleMedium)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = onPickNewPhoto,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .testTag("editor_change_photo_button")
+                                ) {
+                                    Icon(Icons.Filled.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(stringResource(R.string.profile_change_photo))
+                                }
+                                if (!avatarBase64.isNullOrBlank()) {
+                                    OutlinedButton(
+                                        onClick = onResetGooglePhoto,
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("editor_reset_google_photo_button")
+                                    ) {
+                                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(stringResource(R.string.profile_reset_google_photo))
+                                    }
+                                }
+                            }
                             OutlinedTextField(
                                 value = displayName,
                                 onValueChange = { displayName = it },
@@ -496,6 +595,26 @@ fun StudioProfileContent(
                 }
             }
         }
+    }
+
+    if (showPhotoLightbox) {
+        AvatarPhotoLightboxDialog(
+            displayName = displayName,
+            handle = handle,
+            photoUrl = photoUrl,
+            avatarBase64 = avatarBase64,
+            isOnline = isOnline,
+            onDismiss = { showPhotoLightbox = false },
+            canEditPhoto = true,
+            onPickNewPhoto = {
+                showPhotoLightbox = false
+                onPickNewPhoto()
+            },
+            onResetToGooglePhoto = {
+                showPhotoLightbox = false
+                onResetGooglePhoto()
+            }
+        )
     }
 
     pendingDeleteVideo?.let { target ->

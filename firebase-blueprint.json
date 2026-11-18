@@ -11,6 +11,10 @@
         "pushCallAlerts": { "type": "boolean", "description": "Call alert preference" },
         "pushMessageAlerts": { "type": "boolean", "description": "Message alert preference" },
         "hdVideoDefault": { "type": "boolean", "description": "Default HD video stream setting" },
+        "isOnline": { "type": "boolean", "description": "Real-time online presence indicator" },
+        "lastActiveAt": { "type": "string", "format": "date-time", "description": "Last recorded activity server timestamp" },
+        "photoUrl": { "type": "string", "description": "Google account or external avatar URL" },
+        "avatarBase64": { "type": "string", "description": "Compact custom JPEG Base64 profile photo" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp" },
         "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp" }
       },
@@ -27,6 +31,10 @@
         "bio": { "type": "string", "description": "Creator bio" },
         "status": { "type": "string", "enum": ["online", "in_call", "studio", "away"] },
         "isDiscoverable": { "type": "boolean", "description": "Discoverability flag" },
+        "isOnline": { "type": "boolean", "description": "Real-time online presence indicator" },
+        "lastActiveAt": { "type": "string", "format": "date-time", "description": "Last recorded activity server timestamp" },
+        "photoUrl": { "type": "string", "description": "Public creator avatar URL" },
+        "avatarBase64": { "type": "string", "description": "Compact custom JPEG Base64 profile photo" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -131,6 +139,23 @@
       },
       "required": ["hostId", "hostName", "roomCode", "callType", "status", "participantIds", "durationSec", "createdAt", "updatedAt"]
     },
+    "CallSignal": {
+      "title": "CallSignal",
+      "description": "WebRTC SDP offer/answer and ICE candidate signaling packet inside a call session.",
+      "type": "object",
+      "properties": {
+        "callId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "recipientId": { "type": "string" },
+        "type": { "type": "string", "enum": ["offer", "answer", "candidate"] },
+        "sdp": { "type": "string" },
+        "sdpMid": { "type": "string" },
+        "sdpMLineIndex": { "type": "integer" },
+        "candidate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["callId", "senderId", "recipientId", "type", "createdAt"]
+    },
     "AdminRecord": {
       "title": "AdminRecord",
       "description": "Authorized admin/moderator role entry isolated to admins and verified owners.",
@@ -179,6 +204,10 @@
     "/call_sessions/{callId}": {
       "schema": { "$ref": "#/entities/CallSession" },
       "description": "Audio/video calling sessions and logs"
+    },
+    "/call_sessions/{callId}/signals/{signalId}": {
+      "schema": { "$ref": "#/entities/CallSignal" },
+      "description": "WebRTC signaling messages between active call participants"
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminRecord" },

@@ -4,8 +4,10 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.calls.CallNotificationAction
 import com.example.data.AdminRecord
 import com.example.data.CallSession
+import com.example.data.CallSignal
 import com.example.data.ChatMessage
 import com.example.data.ChatThread
 import com.example.data.CreatorProfile
@@ -14,6 +16,7 @@ import com.example.data.PulseCastRepository
 import com.example.data.UserAccount
 import com.example.data.VideoComment
 import com.example.data.VideoUploadStage
+import com.example.data.isFreshRingingForUser
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,11 +28,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface UiState<out T> {
     data object Loading : UiState<Nothing>
@@ -51,7 +57,8 @@ class PulseCastViewModel(
     val currentUserId: String,
     val currentUserName: String,
     val currentUserEmail: String,
-    val currentUserEmailVerified: Boolean = false
+    val currentUserEmailVerified: Boolean = false,
+    val currentUserPhotoUrl: String? = null
 ) : ViewModel() {
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -65,6 +72,10 @@ class PulseCastViewModel(
 
     private val _activeCallId = MutableStateFlow<String?>(null)
     val activeCallId: StateFlow<String?> = _activeCallId.asStateFlow()
+
+    private val _inspectingCreatorTarget = MutableStateFlow<Pair<String, String?>?>(null)
+
+    private val _dismissedIncomingCallIds = MutableStateFlow<Set<String>>(emptySet())
 
     private val _videoUploadState = MutableStateFlow<VideoUploadUiState>(VideoUploadUiState.Idle)
     val videoUploadState: StateFlow<VideoUploadUiState> = _videoUploadState.asStateFlow()
@@ -107,6 +118,37 @@ class PulseCastViewModel(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
 
+    val inspectingCreator: StateFlow<CreatorProfile?> =
+        combine(
+            _inspectingCreatorTarget,
+            creatorsState,
+            userAccountState
+        ) { target, creatorsUiState, ownAccount ->
+            val (targetUid, fallbackName) = target ?: return@combine null
+            val creators = (creatorsUiState as? UiState.Success)?.data.orEmpty()
+            creators.firstOrNull { it.userId == targetUid }
+                ?: if (targetUid == currentUserId) {
+                    CreatorProfile(
+                        userId = currentUserId,
+                        displayName = ownAccount?.displayName?.ifBlank { currentUserName } ?: currentUserName,
+                        handle = currentUserName.lowercase().replace(Regex("[^a-z0-9_]"), "").ifBlank { "creator" },
+                        bio = "Audio, video & live studio creator on PulseCast",
+                        isDiscoverable = true,
+                        isOnline = ownAccount?.isOnline ?: true,
+                        lastActiveAt = ownAccount?.lastActiveAt,
+                        photoUrl = ownAccount?.photoUrl ?: currentUserPhotoUrl,
+                        avatarBase64 = ownAccount?.avatarBase64
+                    )
+                } else {
+                    CreatorProfile(
+                        userId = targetUid,
+                        displayName = fallbackName?.takeIf { it.isNotBlank() } ?: "PulseCast Creator",
+                        handle = fallbackName?.lowercase()?.replace(Regex("[^a-z0-9_]"), "")?.ifBlank { "creator" } ?: "creator",
+                        isDiscoverable = true
+                    )
+                }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
     val selectedVideoComments: StateFlow<List<VideoComment>> =
         _selectedVideoId.flatMapLatest { videoId ->
             if (videoId.isNullOrBlank()) flowOf(emptyList())
@@ -125,10 +167,43 @@ class PulseCastViewModel(
             else repository.observeMessages(chatId, currentUserId).catch { emit(emptyList()) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val selectedChatParticipants: StateFlow<Map<String, CreatorProfile>> =
+        combine(_selectedChatId, chatsState) { chatId, state ->
+            if (chatId.isNullOrBlank()) emptyList()
+            else (state as? UiState.Success)?.data
+                ?.firstOrNull { it.id == chatId }
+                ?.participantIds
+                .orEmpty()
+        }
+            .distinctUntilChanged()
+            .flatMapLatest { participantIds ->
+                if (participantIds.isEmpty()) flowOf(emptyMap())
+                else repository.observeCreatorPresence(participantIds).catch { emit(emptyMap()) }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
+
     val activeCallSession: StateFlow<CallSession?> =
         _activeCallId.flatMapLatest { callId ->
             if (callId.isNullOrBlank()) flowOf(null)
             else repository.observeCallSession(callId).catch { emit(null) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
+    val activeCallSignals: StateFlow<List<CallSignal>> =
+        _activeCallId.flatMapLatest { callId ->
+            if (callId.isNullOrBlank()) flowOf(emptyList())
+            else repository.observeCallSignals(callId, currentUserId).catch { emit(emptyList()) }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val incomingCallSession: StateFlow<CallSession?> =
+        combine(callsState, _activeCallId, _dismissedIncomingCallIds) { state, activeId, dismissed ->
+            if (!activeId.isNullOrBlank()) return@combine null
+            val sessions = (state as? UiState.Success)?.data.orEmpty()
+            val nowMs = System.currentTimeMillis()
+            sessions.firstOrNull { session ->
+                session.isFreshRingingForUser(currentUserId, nowMs) &&
+                    session.id !in dismissed &&
+                    session.roomCode !in dismissed
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
 
     private val isBootstrappedSuperAdmin: Boolean =
@@ -180,15 +255,60 @@ class PulseCastViewModel(
                 .catch { error -> emit(UiState.Error(unwrapError(error, "Failed to load admins"))) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), UiState.Loading)
 
+    @Volatile
+    private var lastActivitySyncMs: Long = 0L
+
     init {
         viewModelScope.launch {
             repository.ensureUserAndCreatorInitialized(
                 uid = currentUserId,
                 displayName = currentUserName,
-                email = currentUserEmail
-            ).onFailure {
+                email = currentUserEmail,
+                photoUrl = currentUserPhotoUrl
+            ).onSuccess {
+                lastActivitySyncMs = System.currentTimeMillis()
+            }.onFailure {
                 Log.w(TAG, "Profile bootstrap failed: ${it.message}")
             }
+        }
+        viewModelScope.launch {
+            activeCallSession.collect { session ->
+                val currentCallId = _activeCallId.value
+                if (currentCallId != null &&
+                    session != null &&
+                    session.roomCode == currentCallId &&
+                    session.status == "ended"
+                ) {
+                    _activeCallId.value = null
+                    _snackbarEvents.tryEmit(
+                        if (session.durationSec == 0L) "Call declined or ended"
+                        else "Call ended (${session.durationSec}s)"
+                    )
+                }
+            }
+        }
+    }
+
+    fun setUserOnline(isOnline: Boolean) {
+        lastActivitySyncMs = if (isOnline) System.currentTimeMillis() else 0L
+        viewModelScope.launch {
+            repository.updateUserActivity(currentUserId, isOnline)
+        }
+    }
+
+    fun recordRecentActivity(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastActivitySyncMs < ACTIVITY_HEARTBEAT_THROTTLE_MS) return
+        lastActivitySyncMs = now
+        viewModelScope.launch {
+            repository.updateUserActivity(currentUserId, isOnline = true)
+        }
+    }
+
+    suspend fun markOfflineNow() {
+        lastActivitySyncMs = 0L
+        withTimeoutOrNull(1500L) {
+            repository.updateUserActivity(currentUserId, isOnline = false)
         }
     }
 
@@ -198,6 +318,23 @@ class PulseCastViewModel(
 
     fun selectChat(chatId: String?) {
         _selectedChatId.value = chatId
+        if (!chatId.isNullOrBlank()) {
+            recordRecentActivity()
+        }
+    }
+
+    fun openCreatorProfile(creatorId: String, fallbackName: String? = null) {
+        if (creatorId.isBlank()) return
+        _inspectingCreatorTarget.value = creatorId to fallbackName
+    }
+
+    fun openCreatorProfile(creator: CreatorProfile) {
+        if (creator.userId.isBlank()) return
+        _inspectingCreatorTarget.value = creator.userId to creator.displayName
+    }
+
+    fun closeCreatorProfile() {
+        _inspectingCreatorTarget.value = null
     }
 
     fun resetVideoUploadState() {
@@ -238,6 +375,7 @@ class PulseCastViewModel(
         }
 
         viewModelScope.launch {
+            var usedLocalFallback = false
             repository.uploadAndPublishVideo(
                 uid = currentUserId,
                 authorName = currentUserName,
@@ -256,12 +394,16 @@ class PulseCastViewModel(
                         is VideoUploadStage.UploadingMedia -> VideoUploadUiState.Uploading(stage.progress)
                         VideoUploadStage.SavingMetadata -> VideoUploadUiState.SavingMetadata
                     }
-                }
+                },
+                onCloudFallbackUsed = { usedLocalFallback = true }
             ).onSuccess {
                 _videoUploadState.value = VideoUploadUiState.Success
                 _snackbarEvents.tryEmit(
-                    if (localVideoUri != null) "Video uploaded to Storage & published"
-                    else "Video metadata published to PulseCast"
+                    when {
+                        usedLocalFallback -> "Published to Feed (saved locally; enable Firebase Storage for cloud streaming)"
+                        localVideoUri != null -> "Video uploaded to Storage & published"
+                        else -> "Video metadata published to PulseCast"
+                    }
                 )
                 onComplete()
             }.onFailure { err ->
@@ -361,6 +503,7 @@ class PulseCastViewModel(
         participantIds: List<String>,
         participantNames: List<String>
     ) {
+        recordRecentActivity()
         viewModelScope.launch {
             repository.createChatThread(
                 uid = currentUserId,
@@ -384,6 +527,7 @@ class PulseCastViewModel(
         imageBase64: String? = null,
         voiceDurationSec: Long? = null
     ) {
+        recordRecentActivity(force = true)
         viewModelScope.launch {
             repository.sendMessage(
                 chatId = chat.id,
@@ -401,6 +545,7 @@ class PulseCastViewModel(
     }
 
     fun markMessagesRead(chatId: String, messages: List<ChatMessage>) {
+        recordRecentActivity()
         viewModelScope.launch {
             repository.markUnreadMessagesRead(chatId, currentUserId, messages)
         }
@@ -491,6 +636,90 @@ class PulseCastViewModel(
         }
     }
 
+    fun acceptIncomingCall(session: CallSession) {
+        val code = session.roomCode.ifBlank { session.id }
+        if (code.isBlank()) return
+        _dismissedIncomingCallIds.value = _dismissedIncomingCallIds.value + session.id + code
+        recordRecentActivity(force = true)
+        _activeCallId.value = code
+        viewModelScope.launch {
+            repository.joinCallSession(code, currentUserId, currentUserName)
+                .onSuccess { joined ->
+                    _activeCallId.value = joined.roomCode
+                }
+                .onFailure {
+                    if (_activeCallId.value == code) {
+                        _activeCallId.value = null
+                    }
+                    _snackbarEvents.tryEmit(it.localizedMessage ?: "Call is no longer active")
+                }
+        }
+    }
+
+    fun declineIncomingCall(session: CallSession) {
+        val code = session.roomCode.ifBlank { session.id }
+        _dismissedIncomingCallIds.value = _dismissedIncomingCallIds.value + session.id + code
+        if (code.isBlank()) return
+        viewModelScope.launch {
+            repository.declineCallSession(code)
+                .onFailure {
+                    Log.w(TAG, "Decline call failed: ${it.message}")
+                }
+        }
+    }
+
+    fun handleCallNotificationAction(action: CallNotificationAction) {
+        val matching = (callsState.value as? UiState.Success)?.data
+            ?.firstOrNull { it.roomCode == action.roomCode || it.id == action.roomCode }
+        when (action) {
+            is CallNotificationAction.Answer -> {
+                if (matching != null && matching.status != "ended") {
+                    acceptIncomingCall(matching)
+                } else {
+                    joinCallByCode(action.roomCode)
+                }
+            }
+
+            is CallNotificationAction.Decline -> {
+                if (matching != null) {
+                    declineIncomingCall(matching)
+                } else {
+                    _dismissedIncomingCallIds.value = _dismissedIncomingCallIds.value + action.roomCode
+                    viewModelScope.launch { repository.declineCallSession(action.roomCode) }
+                }
+            }
+
+            is CallNotificationAction.Hangup -> {
+                if (_activeCallId.value == action.roomCode || _activeCallId.value != null) {
+                    endActiveCall(0L)
+                }
+            }
+        }
+    }
+
+    suspend fun sendCallSignal(
+        callId: String,
+        recipientId: String,
+        type: String,
+        sdp: String?,
+        sdpMid: String?,
+        sdpMLineIndex: Int?,
+        candidate: String?
+    ) {
+        repository.sendCallSignal(
+            callId = callId,
+            senderId = currentUserId,
+            recipientId = recipientId,
+            type = type,
+            sdp = sdp,
+            sdpMid = sdpMid,
+            sdpMLineIndex = sdpMLineIndex,
+            candidate = candidate
+        ).onFailure {
+            Log.w(TAG, "Signal send failed ($type -> $recipientId): ${it.message}")
+        }
+    }
+
     fun endActiveCall(durationSec: Long) {
         val callId = _activeCallId.value ?: return
         _activeCallId.value = null
@@ -506,6 +735,23 @@ class PulseCastViewModel(
             repository.updateCreatorProfile(currentUserId, displayName, handle, bio, status)
                 .onSuccess { _snackbarEvents.tryEmit("Creator profile saved") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Update failed") }
+        }
+    }
+
+    fun updateProfilePhoto(avatarBase64: String?) {
+        viewModelScope.launch {
+            repository.updateProfilePhoto(
+                uid = currentUserId,
+                avatarBase64 = avatarBase64,
+                photoUrl = currentUserPhotoUrl
+            ).onSuccess {
+                _snackbarEvents.tryEmit(
+                    if (avatarBase64.isNullOrBlank()) "Reverted to Google account photo"
+                    else "Profile photo updated"
+                )
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update profile photo")
+            }
         }
     }
 
@@ -593,6 +839,7 @@ class PulseCastViewModel(
     private companion object {
         const val TAG = "PulseCastVM"
         const val STOP_TIMEOUT_MS = 5000L
+        const val ACTIVITY_HEARTBEAT_THROTTLE_MS = 30_000L
         const val BOOTSTRAPPED_ADMIN_EMAIL = "rsk755734@gmail.com"
     }
 }

@@ -8,6 +8,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Cameraswitch
@@ -37,7 +40,6 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.VideoCall
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -66,41 +68,78 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.R
+import com.example.calls.RtcConnectionState
+import com.example.calls.WebRtcCallClient
 import com.example.data.CallSession
+import com.example.data.CallSignal
 import com.example.media.formatDuration
 import com.example.permissions.PermissionManager
 import com.example.permissions.PermissionManagerScope
 import com.example.permissions.PermissionRequestCard
 import com.example.ui.PulseCastViewModel
 import com.example.ui.UiState
+import com.example.ui.components.UserAvatarWithStatus
+import com.example.ui.theme.EmeraldMint
 import kotlinx.coroutines.delay
+import org.webrtc.EglBase
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoTrack
 
 @Composable
 fun CallsScreen(
     viewModel: PulseCastViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    renderActiveCallStage: Boolean = true
 ) {
     val activeCall by viewModel.activeCallSession.collectAsStateWithLifecycle()
+    val activeCallSignals by viewModel.activeCallSignals.collectAsStateWithLifecycle()
     val callsState by viewModel.callsState.collectAsStateWithLifecycle()
     val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
-    val otherCreators = remember(creatorsState, viewModel.currentUserId) {
-        (creatorsState as? UiState.Success)?.data
-            ?.filter { it.userId != viewModel.currentUserId }
-            .orEmpty()
+    val creatorsList = remember(creatorsState) {
+        (creatorsState as? UiState.Success)?.data.orEmpty()
+    }
+    val creatorsById = remember(creatorsList) {
+        creatorsList.associateBy { it.userId }
+    }
+    val otherCreators = remember(creatorsList, viewModel.currentUserId) {
+        creatorsList.filter { it.userId != viewModel.currentUserId }
     }
     var roomCodeInput by remember { mutableStateOf("") }
 
-    if (activeCall != null) {
+    if (renderActiveCallStage && activeCall != null) {
+        val currentSession = activeCall!!
+        val peerCreator = remember(currentSession, creatorsById, viewModel.currentUserId) {
+            val peerId = currentSession.participantIds.firstOrNull { it != viewModel.currentUserId }
+                ?: currentSession.hostId
+            creatorsById[peerId]
+        }
         ActiveCallStage(
-            session = activeCall!!,
+            session = currentSession,
+            currentUserId = viewModel.currentUserId,
+            signals = activeCallSignals,
+            onSendSignal = { recipientId, type, sdp, sdpMid, sdpMLineIndex, candidate ->
+                viewModel.sendCallSignal(
+                    callId = currentSession.roomCode,
+                    recipientId = recipientId,
+                    type = type,
+                    sdp = sdp,
+                    sdpMid = sdpMid,
+                    sdpMLineIndex = sdpMLineIndex,
+                    candidate = candidate
+                )
+            },
             onEndCall = { duration -> viewModel.endActiveCall(duration) },
-            modifier = modifier
+            modifier = modifier,
+            peerPhotoUrl = peerCreator?.photoUrl,
+            peerAvatarBase64 = peerCreator?.avatarBase64
         )
     } else {
         LazyColumn(
@@ -235,26 +274,53 @@ fun CallsScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(otherCreators, key = { it.userId }) { creator ->
+                                val isOnline = com.example.data.resolveIsUserOnline(
+                                    isOnlineFlag = creator.isOnline,
+                                    lastActiveAt = creator.lastActiveAt,
+                                    updatedAt = creator.updatedAt
+                                )
                                 Surface(
                                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
                                     shape = RoundedCornerShape(16.dp),
-                                    modifier = Modifier.width(208.dp)
+                                    modifier = Modifier
+                                        .width(222.dp)
+                                        .testTag("calls_creator_card_${creator.userId}")
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(12.dp),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Text(
-                                            text = creator.displayName,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            text = "@${creator.handle}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            maxLines = 1
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable { viewModel.openCreatorProfile(creator) }
+                                                .padding(2.dp)
+                                                .testTag("calls_creator_profile_${creator.userId}")
+                                        ) {
+                                            UserAvatarWithStatus(
+                                                displayName = creator.displayName,
+                                                isOnline = isOnline,
+                                                avatarSize = 40.dp,
+                                                photoUrl = creator.photoUrl,
+                                                avatarBase64 = creator.avatarBase64
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = creator.displayName,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    maxLines = 1
+                                                )
+                                                Text(
+                                                    text = "@${creator.handle}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                        }
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             FilledTonalButton(
                                                 onClick = { viewModel.startCall("audio", targetCreator = creator) },
@@ -402,10 +468,22 @@ private fun CallHistoryRow(
 }
 
 @Composable
-private fun ActiveCallStage(
+internal fun ActiveCallStage(
     session: CallSession,
+    currentUserId: String = "",
+    signals: List<CallSignal> = emptyList(),
+    onSendSignal: suspend (
+        recipientId: String,
+        type: String,
+        sdp: String?,
+        sdpMid: String?,
+        sdpMLineIndex: Int?,
+        candidate: String?
+    ) -> Unit = { _, _, _, _, _, _ -> },
     onEndCall: (Long) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    peerPhotoUrl: String? = null,
+    peerAvatarBase64: String? = null
 ) {
     var isCameraEnabled by remember(session.roomCode) { mutableStateOf(session.callType != "audio") }
     val requiredPermissions = remember(isCameraEnabled) {
@@ -428,21 +506,31 @@ private fun ActiveCallStage(
         deniedContent = { permScope ->
             ActiveCallStageContent(
                 session = session,
+                currentUserId = currentUserId,
+                signals = signals,
                 isCameraEnabled = isCameraEnabled,
                 onToggleCamera = { isCameraEnabled = !isCameraEnabled },
+                onSendSignal = onSendSignal,
                 permScope = permScope,
                 onEndCall = onEndCall,
-                modifier = modifier
+                modifier = modifier,
+                peerPhotoUrl = peerPhotoUrl,
+                peerAvatarBase64 = peerAvatarBase64
             )
         }
     ) { permScope ->
         ActiveCallStageContent(
             session = session,
+            currentUserId = currentUserId,
+            signals = signals,
             isCameraEnabled = isCameraEnabled,
             onToggleCamera = { isCameraEnabled = !isCameraEnabled },
+            onSendSignal = onSendSignal,
             permScope = permScope,
             onEndCall = onEndCall,
-            modifier = modifier
+            modifier = modifier,
+            peerPhotoUrl = peerPhotoUrl,
+            peerAvatarBase64 = peerAvatarBase64
         )
     }
 }
@@ -450,30 +538,100 @@ private fun ActiveCallStage(
 @Composable
 private fun ActiveCallStageContent(
     session: CallSession,
+    currentUserId: String,
+    signals: List<CallSignal>,
     isCameraEnabled: Boolean,
     onToggleCamera: () -> Unit,
+    onSendSignal: suspend (
+        recipientId: String,
+        type: String,
+        sdp: String?,
+        sdpMid: String?,
+        sdpMLineIndex: Int?,
+        candidate: String?
+    ) -> Unit,
     permScope: PermissionManagerScope,
     onEndCall: (Long) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    peerPhotoUrl: String? = null,
+    peerAvatarBase64: String? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var elapsedSec by remember(session.roomCode) { mutableLongStateOf(0L) }
-    var isMuted by remember { mutableStateOf(false) }
-    var isFrontCamera by remember { mutableStateOf(true) }
-    var isSpeakerOn by remember { mutableStateOf(true) }
+    var isMuted by remember(session.roomCode) { mutableStateOf(false) }
+    var isFrontCamera by remember(session.roomCode) { mutableStateOf(true) }
+    var isSpeakerOn by remember(session.roomCode) { mutableStateOf(session.callType != "audio") }
 
     val hasCameraPerm = permScope.hasCamera
+    val hasMicPerm = permScope.hasMicrophone
 
-    LaunchedEffect(session.roomCode) {
-        while (true) {
-            delay(1000L)
-            elapsedSec += 1L
+    val rtcClient = remember(session.roomCode, currentUserId) {
+        WebRtcCallClient(
+            context = context,
+            roomCode = session.roomCode,
+            selfUid = currentUserId,
+            initialVideoEnabled = session.callType != "audio",
+            onSendSignal = onSendSignal
+        )
+    }
+
+    DisposableEffect(rtcClient) {
+        onDispose { rtcClient.dispose() }
+    }
+
+    LaunchedEffect(rtcClient, hasMicPerm, hasCameraPerm, isCameraEnabled) {
+        if (hasMicPerm && currentUserId.isNotBlank()) {
+            rtcClient.startIfPermitted()
+            rtcClient.setCameraEnabled(isCameraEnabled)
+        }
+    }
+
+    LaunchedEffect(rtcClient, session.participantIds, session.status, hasMicPerm) {
+        if (hasMicPerm && currentUserId.isNotBlank()) {
+            rtcClient.syncParticipants(session.participantIds, session.status)
+        }
+    }
+
+    LaunchedEffect(rtcClient, signals) {
+        rtcClient.handleIncomingSignals(signals)
+    }
+
+    val rtcState by rtcClient.connectionState.collectAsStateWithLifecycle()
+    val localVideoTrack by rtcClient.localVideoTrack.collectAsStateWithLifecycle()
+    val remoteVideoTrack by rtcClient.remoteVideoTrack.collectAsStateWithLifecycle()
+    val isMediaReady by rtcClient.isMediaReady.collectAsStateWithLifecycle()
+
+    LaunchedEffect(session.roomCode, session.status) {
+        if (session.status == "active") {
+            while (true) {
+                delay(1000L)
+                elapsedSec += 1L
+            }
         }
     }
 
     BackHandler {
         onEndCall(elapsedSec)
+    }
+
+    val peerDisplayName = remember(session, currentUserId) {
+        session.participantNames
+            ?.firstOrNull { name -> name.isNotBlank() && (session.hostId == currentUserId || name == session.hostName) }
+            ?: session.hostName.ifBlank { "PulseCast Peer" }
+    }
+
+    val statusText = when {
+        session.status == "ringing" ->
+            stringResource(R.string.call_status_ringing_peer)
+        rtcState == RtcConnectionState.CONNECTED ->
+            "${stringResource(R.string.call_status_connected_live)} · ${formatDuration(elapsedSec)}"
+        rtcState == RtcConnectionState.CONNECTING ->
+            "${stringResource(R.string.call_status_connecting)} · ${formatDuration(elapsedSec)}"
+        rtcState == RtcConnectionState.RECONNECTING ->
+            "${stringResource(R.string.call_status_reconnecting)} · ${formatDuration(elapsedSec)}"
+        else ->
+            "${session.status.uppercase()} · ${formatDuration(elapsedSec)}"
     }
 
     Box(
@@ -487,53 +645,105 @@ private fun ActiveCallStageContent(
                     )
                 )
             )
+            .testTag("active_call_stage")
     ) {
-        if (isCameraEnabled && hasCameraPerm) {
-            CameraXPreview(
-                useFrontCamera = isFrontCamera,
-                lifecycleOwner = lifecycleOwner,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Column(
-                modifier = Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(96.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = session.hostName.take(1).uppercase(),
-                        style = MaterialTheme.typography.displaySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-                Text(
-                    text = if (session.callType == "audio" && !isCameraEnabled) {
-                        "HD Audio Connected"
-                    } else {
-                        "Camera Paused"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground
+        when {
+            remoteVideoTrack != null && rtcClient.eglBase != null -> {
+                WebRtcVideoSurface(
+                    videoTrack = remoteVideoTrack!!,
+                    eglContext = rtcClient.eglBase!!.eglBaseContext,
+                    mirror = false,
+                    isOverlay = false,
+                    modifier = Modifier.fillMaxSize()
                 )
-                if (isCameraEnabled && !hasCameraPerm) {
-                    FilledTonalButton(
-                        onClick = {
-                            if (permScope.permanentlyDenied) {
-                                permScope.openAppSettings()
-                            } else {
-                                permScope.requestPermissions()
-                            }
-                        },
-                        modifier = Modifier.testTag("active_call_grant_permissions_button")
+                if (isCameraEnabled && hasCameraPerm && localVideoTrack != null) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        tonalElevation = 6.dp,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 84.dp, end = 16.dp)
+                            .size(width = 112.dp, height = 164.dp)
                     ) {
-                        Text(if (permScope.permanentlyDenied) "Open App Settings" else "Enable Camera & Mic")
+                        WebRtcVideoSurface(
+                            videoTrack = localVideoTrack!!,
+                            eglContext = rtcClient.eglBase!!.eglBaseContext,
+                            mirror = isFrontCamera,
+                            isOverlay = true,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+
+            isCameraEnabled && hasCameraPerm && localVideoTrack != null && rtcClient.eglBase != null -> {
+                WebRtcVideoSurface(
+                    videoTrack = localVideoTrack!!,
+                    eglContext = rtcClient.eglBase!!.eglBaseContext,
+                    mirror = isFrontCamera,
+                    isOverlay = false,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            isCameraEnabled && hasCameraPerm && !isMediaReady -> {
+                CameraXPreview(
+                    useFrontCamera = isFrontCamera,
+                    lifecycleOwner = lifecycleOwner,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            else -> {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    UserAvatarWithStatus(
+                        displayName = peerDisplayName,
+                        isOnline = session.status != "ended",
+                        avatarSize = 104.dp,
+                        isGroup = session.callType == "group",
+                        photoUrl = peerPhotoUrl,
+                        avatarBase64 = peerAvatarBase64,
+                        indicatorTestTag = "active_call_peer_avatar_indicator"
+                    )
+                    Text(
+                        text = peerDisplayName,
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = when {
+                            session.status == "ringing" -> "Calling $peerDisplayName…"
+                            session.callType == "audio" || !isCameraEnabled -> "Live Voice Call · Microphone ${if (isMuted) "Muted" else "Active"}"
+                            else -> "Camera Paused"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (session.status == "active" && !isMuted) {
+                            EmeraldMint
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                    if ((isCameraEnabled && !hasCameraPerm) || !hasMicPerm) {
+                        FilledTonalButton(
+                            onClick = {
+                                if (permScope.permanentlyDenied) {
+                                    permScope.openAppSettings()
+                                } else {
+                                    permScope.requestPermissions()
+                                }
+                            },
+                            modifier = Modifier.testTag("active_call_grant_permissions_button")
+                        ) {
+                            Text(
+                                if (permScope.permanentlyDenied) "Open App Settings"
+                                else if (isCameraEnabled) "Enable Camera & Mic"
+                                else "Allow Microphone to Talk"
+                            )
+                        }
                     }
                 }
             }
@@ -549,7 +759,7 @@ private fun ActiveCallStageContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
-                color = Color.Black.copy(alpha = 0.65f),
+                color = Color.Black.copy(alpha = 0.68f),
                 shape = RoundedCornerShape(14.dp)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -559,9 +769,14 @@ private fun ActiveCallStageContent(
                         color = Color.White
                     )
                     Text(
-                        text = "${session.status.uppercase()} · ${formatDuration(elapsedSec)}",
+                        text = statusText,
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (rtcState == RtcConnectionState.CONNECTED || session.status == "active") {
+                            EmeraldMint
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier.testTag("active_call_status_label")
                     )
                 }
             }
@@ -575,7 +790,7 @@ private fun ActiveCallStageContent(
                     context.startActivity(Intent.createChooser(shareIntent, "Invite to Call"))
                 },
                 colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = Color.Black.copy(alpha = 0.65f),
+                    containerColor = Color.Black.copy(alpha = 0.68f),
                     contentColor = Color.White
                 )
             ) {
@@ -589,27 +804,36 @@ private fun ActiveCallStageContent(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .padding(16.dp),
-            color = Color.Black.copy(alpha = 0.78f),
+            color = Color.Black.copy(alpha = 0.80f),
             shape = RoundedCornerShape(24.dp)
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 FilledTonalIconButton(
-                    onClick = { isMuted = !isMuted },
-                    modifier = Modifier.size(50.dp).testTag("toggle_mute_button")
+                    onClick = {
+                        val nextMuted = !isMuted
+                        isMuted = nextMuted
+                        rtcClient.setMuted(nextMuted)
+                    },
+                    modifier = Modifier.size(48.dp).testTag("toggle_mute_button")
                 ) {
                     Icon(
                         imageVector = if (isMuted) Icons.Filled.MicOff else Icons.Filled.Mic,
-                        contentDescription = if (isMuted) "Unmute microphone" else "Mute microphone"
+                        contentDescription = if (isMuted) "Unmute microphone" else "Mute microphone",
+                        tint = if (isMuted) MaterialTheme.colorScheme.error else Color.White
                     )
                 }
 
                 FilledTonalIconButton(
-                    onClick = onToggleCamera,
-                    modifier = Modifier.size(50.dp).testTag("toggle_camera_button")
+                    onClick = {
+                        val nextEnabled = !isCameraEnabled
+                        rtcClient.setCameraEnabled(nextEnabled)
+                        onToggleCamera()
+                    },
+                    modifier = Modifier.size(48.dp).testTag("toggle_camera_button")
                 ) {
                     Icon(
                         imageVector = if (isCameraEnabled) Icons.Filled.Videocam else Icons.Filled.VideocamOff,
@@ -617,30 +841,37 @@ private fun ActiveCallStageContent(
                     )
                 }
 
+                FilledTonalIconButton(
+                    onClick = {
+                        val nextSpeaker = !isSpeakerOn
+                        isSpeakerOn = nextSpeaker
+                        rtcClient.setSpeakerphone(nextSpeaker)
+                    },
+                    modifier = Modifier.size(48.dp).testTag("toggle_speaker_button")
+                ) {
+                    Icon(
+                        imageVector = if (isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                        contentDescription = if (isSpeakerOn) "Switch to earpiece" else "Turn speakerphone on",
+                        tint = if (isSpeakerOn) EmeraldMint else Color.White
+                    )
+                }
+
                 if (isCameraEnabled && hasCameraPerm) {
                     FilledTonalIconButton(
-                        onClick = { isFrontCamera = !isFrontCamera },
-                        modifier = Modifier.size(50.dp).testTag("flip_camera_button")
+                        onClick = {
+                            isFrontCamera = !isFrontCamera
+                            rtcClient.switchCamera()
+                        },
+                        modifier = Modifier.size(48.dp).testTag("flip_camera_button")
                     ) {
                         Icon(Icons.Filled.Cameraswitch, contentDescription = "Switch front or back camera")
-                    }
-                } else {
-                    FilledTonalIconButton(
-                        onClick = { isSpeakerOn = !isSpeakerOn },
-                        modifier = Modifier.size(50.dp)
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Toggle speakerphone",
-                            tint = if (isSpeakerOn) MaterialTheme.colorScheme.primary else Color.White
-                        )
                     }
                 }
 
                 Button(
                     onClick = { onEndCall(elapsedSec) },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        containerColor = MaterialTheme.colorScheme.error,
                         contentColor = Color.White
                     ),
                     shape = CircleShape,
@@ -652,6 +883,44 @@ private fun ActiveCallStageContent(
             }
         }
     }
+}
+
+@Composable
+private fun WebRtcVideoSurface(
+    videoTrack: VideoTrack,
+    eglContext: EglBase.Context,
+    mirror: Boolean,
+    isOverlay: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val renderer = remember(eglContext, isOverlay) {
+        SurfaceViewRenderer(context).apply {
+            init(eglContext, null)
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FILL)
+            setEnableHardwareScaler(true)
+            setZOrderMediaOverlay(isOverlay)
+        }
+    }
+
+    DisposableEffect(renderer, videoTrack, mirror) {
+        renderer.setMirror(mirror)
+        videoTrack.addSink(renderer)
+        onDispose {
+            runCatching { videoTrack.removeSink(renderer) }
+        }
+    }
+
+    DisposableEffect(renderer) {
+        onDispose {
+            runCatching { renderer.release() }
+        }
+    }
+
+    AndroidView(
+        factory = { renderer },
+        modifier = modifier
+    )
 }
 
 @Composable

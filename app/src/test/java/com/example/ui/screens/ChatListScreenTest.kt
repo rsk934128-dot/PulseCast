@@ -1,11 +1,14 @@
 package com.example.ui.screens
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import com.example.data.ChatThread
 import com.example.data.CreatorProfile
@@ -172,5 +175,79 @@ class ChatListScreenTest {
         composeRule.onNodeWithTag("creator_directory_row_uid_carol").assertIsDisplayed()
         composeRule.onNodeWithTag("directory_video_uid_carol").performClick()
         assertEquals("uid_carol" to "video", calledPeer)
+    }
+
+    @Test
+    fun threadListAndPeopleAvatars_displayIsOnlineIndicatorFromRecentActivity() {
+        val nowMs = System.currentTimeMillis()
+        val creators = listOf(
+            CreatorProfile(
+                userId = "uid_bob",
+                displayName = "Bob Rivera",
+                handle = "bob_r",
+                isOnline = true,
+                lastActiveAt = Timestamp(Date(nowMs - 20_000L))
+            ),
+            CreatorProfile(
+                userId = "uid_carol",
+                displayName = "Carol Chen",
+                handle = "carol",
+                isOnline = true,
+                lastActiveAt = Timestamp(Date(nowMs - 15 * 60_000L))
+            )
+        )
+        val threads = listOf(
+            ChatThread(
+                id = "chat_dm_bob",
+                title = "Bob Rivera",
+                isGroup = false,
+                participantIds = listOf("uid_alice", "uid_bob"),
+                lastMessageText = "Ready",
+                lastMessageSenderId = "uid_bob",
+                lastMessageAt = Timestamp(Date(nowMs - 10_000L))
+            ),
+            ChatThread(
+                id = "chat_dm_carol",
+                title = "Carol Chen",
+                isGroup = false,
+                participantIds = listOf("uid_alice", "uid_carol"),
+                lastMessageText = "Catch you later",
+                lastMessageSenderId = "uid_carol",
+                lastMessageAt = Timestamp(Date(nowMs - 20_000L))
+            )
+        )
+
+        composeRule.setContent {
+            PulseCastTheme {
+                ChatListScreen(
+                    chatsState = UiState.Success(threads),
+                    creatorsState = UiState.Success(creators),
+                    currentUserId = "uid_alice",
+                    onSelectChat = {},
+                    onNewChatClick = {}
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("people_strip_online_indicator_uid_bob", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals("Bob Rivera is online")
+        composeRule.onNodeWithText("@bob_r · Online").assertIsDisplayed()
+        composeRule.onNodeWithTag("chat_thread_online_indicator_chat_dm_bob", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals("Bob Rivera is online")
+
+        composeRule.onNodeWithTag("chat_list_lazy_column")
+            .performScrollToNode(hasTestTag("chat_thread_chat_dm_carol"))
+        composeRule.onNodeWithTag("chat_thread_online_indicator_chat_dm_carol", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals("Carol Chen is offline")
+
+        composeRule.onNodeWithTag("chat_filter_people").performClick()
+        composeRule.onNodeWithTag("directory_online_indicator_uid_carol", useUnmergedTree = true)
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals("Carol Chen is offline")
+        composeRule.onNodeWithText("@carol · Offline").assertIsDisplayed()
     }
 }

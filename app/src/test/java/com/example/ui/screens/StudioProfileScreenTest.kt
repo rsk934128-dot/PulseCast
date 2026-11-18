@@ -221,4 +221,60 @@ class StudioProfileScreenTest {
         composeRule.onNodeWithTag("profile_videos_error").assertIsDisplayed()
         composeRule.onNodeWithText("Unable to load uploaded videos").assertIsDisplayed()
     }
+
+    @Test
+    fun profile_creatorProfilesStripAndPhotoActions_invokeCallbacksAndOpenLightbox() {
+        val otherCreators = listOf(
+            com.example.data.CreatorProfile(
+                userId = "uid_khoku",
+                displayName = "Khoku Moni",
+                handle = "khoku",
+                photoUrl = "https://example.com/khoku.jpg",
+                isOnline = true,
+                lastActiveAt = com.google.firebase.Timestamp.now()
+            )
+        )
+        var viewedCreatorId: String? = null
+        var pickPhotoCount = 0
+
+        composeRule.setContent {
+            PulseCastTheme {
+                StudioProfileContent(
+                    initialDisplayName = "Rubel Sk",
+                    initialHandle = "rubel",
+                    email = "rubel@pulsecast.app",
+                    initialBio = "Live creator",
+                    initialStatus = "online",
+                    photoUrl = "https://example.com/rubel.jpg",
+                    pushCalls = true,
+                    pushMessages = true,
+                    hdVideo = true,
+                    myVideosState = UiState.Success(emptyList()),
+                    onSaveProfile = { _, _, _, _ -> },
+                    onUpdatePreferences = { _, _, _ -> },
+                    onUploadVideoClick = {},
+                    onVideoClick = {},
+                    onDeleteVideo = {},
+                    onSignOut = {},
+                    discoverableCreators = otherCreators,
+                    onPickNewPhoto = { pickPhotoCount++ },
+                    onViewCreatorProfile = { viewedCreatorId = it.userId }
+                )
+            }
+        }
+
+        // Tapping profile change photo invokes picker callback
+        composeRule.onNodeWithTag("profile_change_photo_button").assertIsDisplayed().performClick()
+        assertEquals(1, pickPhotoCount)
+
+        // Tapping own avatar opens lightbox dialog
+        composeRule.onNodeWithTag("profile_avatar_image").performClick()
+        composeRule.onNodeWithTag("avatar_photo_lightbox_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("photo_lightbox_close_button").performClick()
+
+        // Tapping creator card in Studio Creator Profiles strip opens creator profile
+        scrollListToTag("studio_creators_strip")
+        composeRule.onNodeWithTag("studio_creator_card_uid_khoku").assertIsDisplayed().performClick()
+        assertEquals("uid_khoku", viewedCreatorId)
+    }
 }

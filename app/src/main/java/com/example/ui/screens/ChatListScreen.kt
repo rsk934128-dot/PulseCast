@@ -49,6 +49,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -67,9 +68,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.ChatThread
 import com.example.data.CreatorProfile
+import com.example.data.isRecentlyOnline
 import com.example.ui.PulseCastViewModel
 import com.example.ui.UiState
+import com.example.ui.components.UserAvatarWithStatus
 import com.google.firebase.Timestamp
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -87,7 +91,8 @@ fun ChatListScreen(
     onNewChatClick: () -> Unit,
     onStartDirectChat: (CreatorProfile) -> Unit = { viewModel.startOrOpenDirectChat(it) },
     onCallCreator: (CreatorProfile, String) -> Unit = { _, _ -> },
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onViewProfile: ((CreatorProfile) -> Unit)? = { viewModel.openCreatorProfile(it) }
 ) {
     val chatsState by viewModel.chatsState.collectAsStateWithLifecycle()
     val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
@@ -99,7 +104,8 @@ fun ChatListScreen(
         creatorsState = creatorsState,
         onStartDirectChat = onStartDirectChat,
         onCallCreator = onCallCreator,
-        modifier = modifier
+        modifier = modifier,
+        onViewProfile = onViewProfile
     )
 }
 
@@ -112,14 +118,26 @@ fun ChatListScreen(
     creatorsState: UiState<List<CreatorProfile>> = UiState.Success(emptyList()),
     onStartDirectChat: (CreatorProfile) -> Unit = {},
     onCallCreator: (CreatorProfile, String) -> Unit = { _, _ -> },
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onViewProfile: ((CreatorProfile) -> Unit)? = null
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var activeFilter by rememberSaveable { mutableStateOf(ChatListFilter.ALL) }
-    val otherCreators = remember(creatorsState, currentUserId) {
-        (creatorsState as? UiState.Success)?.data
-            ?.filter { it.userId != currentUserId }
-            .orEmpty()
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+    val allCreators = remember(creatorsState) {
+        (creatorsState as? UiState.Success)?.data.orEmpty()
+    }
+    val creatorsById = remember(allCreators) {
+        allCreators.associateBy { it.userId }
+    }
+    val otherCreators = remember(allCreators, currentUserId) {
+        allCreators.filter { it.userId != currentUserId }
     }
 
     Scaffold(
@@ -252,6 +270,11 @@ fun ChatListScreen(
                                         items(filteredCreators, key = { it.userId }) { creator ->
                                             CreatorDirectoryRow(
                                                 creator = creator,
+                                                isOnline = creator.isRecentlyOnline(nowMillis),
+                                                onViewProfile = {
+                                                    if (onViewProfile != null) onViewProfile(creator)
+                                                    else onStartDirectChat(creator)
+                                                },
                                                 onChat = { onStartDirectChat(creator) },
                                                 onAudioCall = { onCallCreator(creator, "audio") },
                                                 onVideoCall = { onCallCreator(creator, "video") }
@@ -278,15 +301,37 @@ fun ChatListScreen(
                                         item(key = "people_strip") {
                                             PeopleStripSection(
                                                 creators = filteredCreators,
+                                                nowMillis = nowMillis,
+                                                onViewProfile = onViewProfile ?: onStartDirectChat,
                                                 onChat = onStartDirectChat,
                                                 onCall = onCallCreator
                                             )
                                         }
                                     }
                                     items(filteredThreads, key = { it.id }) { thread ->
+                                        val peerProfile = remember(thread, currentUserId, creatorsById) {
+                                            if (thread.isGroup) null
+                                            else thread.participantIds.firstOrNull { it != currentUserId }?.let { creatorsById[it] }
+                                        }
+                                        val isThreadOnline = remember(thread, currentUserId, creatorsById, nowMillis) {
+                                            val peerIds = thread.participantIds.filter { it != currentUserId }
+                                            if (peerIds.isNotEmpty()) {
+                                                peerIds.any { uid -> creatorsById[uid]?.isRecentlyOnline(nowMillis) == true }
+                                            } else {
+                                                creatorsById[currentUserId]?.isRecentlyOnline(nowMillis) == true
+                                            }
+                                        }
                                         ChatConversationRow(
                                             thread = thread,
                                             currentUserId = currentUserId,
+                                            isOnline = isThreadOnline,
+                                            peerPhotoUrl = peerProfile?.photoUrl,
+                                            peerAvatarBase64 = peerProfile?.avatarBase64,
+                                            onAvatarClick = if (peerProfile != null && onViewProfile != null) {
+                                                { onViewProfile(peerProfile) }
+                                            } else {
+                                                null
+                                            },
                                             onClick = { onSelectChat(thread) }
                                         )
                                     }
@@ -359,6 +404,10 @@ private fun ChatSearchAndFilterBar(
 private fun ChatConversationRow(
     thread: ChatThread,
     currentUserId: String,
+    isOnline: Boolean,
+    peerPhotoUrl: String? = null,
+    peerAvatarBase64: String? = null,
+    onAvatarClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     val timeLabel = remember(thread.lastMessageAt, thread.createdAt) {
@@ -391,27 +440,16 @@ private fun ChatConversationRow(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(50.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                if (thread.isGroup) {
-                    Icon(
-                        imageVector = Icons.Filled.Group,
-                        contentDescription = thread.title,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                } else {
-                    Text(
-                        text = thread.title.take(1).uppercase().ifBlank { "C" },
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
+            UserAvatarWithStatus(
+                displayName = thread.title,
+                isOnline = isOnline,
+                avatarSize = 50.dp,
+                isGroup = thread.isGroup,
+                photoUrl = peerPhotoUrl,
+                avatarBase64 = peerAvatarBase64,
+                onClick = onAvatarClick,
+                indicatorTestTag = "chat_thread_online_indicator_${thread.id}"
+            )
 
             Spacer(modifier = Modifier.width(14.dp))
 
@@ -560,6 +598,8 @@ private fun FilteredEmptyState(onClearFilters: () -> Unit) {
 @Composable
 private fun PeopleStripSection(
     creators: List<CreatorProfile>,
+    nowMillis: Long,
+    onViewProfile: (CreatorProfile) -> Unit,
     onChat: (CreatorProfile) -> Unit,
     onCall: (CreatorProfile, String) -> Unit
 ) {
@@ -581,7 +621,7 @@ private fun PeopleStripSection(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Tap to chat or call",
+                text = "Tap profile to view",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -591,12 +631,13 @@ private fun PeopleStripSection(
             contentPadding = PaddingValues(vertical = 2.dp)
         ) {
             items(creators, key = { it.userId }) { creator ->
+                val creatorOnline = creator.isRecentlyOnline(nowMillis)
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .width(224.dp)
-                        .clickable { onChat(creator) }
+                        .clickable { onViewProfile(creator) }
                         .testTag("people_strip_card_${creator.userId}")
                 ) {
                     Column(
@@ -607,19 +648,14 @@ private fun PeopleStripSection(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = creator.displayName.take(1).uppercase().ifBlank { "P" },
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
+                            UserAvatarWithStatus(
+                                displayName = creator.displayName,
+                                isOnline = creatorOnline,
+                                avatarSize = 40.dp,
+                                photoUrl = creator.photoUrl,
+                                avatarBase64 = creator.avatarBase64,
+                                indicatorTestTag = "people_strip_online_indicator_${creator.userId}"
+                            )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = creator.displayName,
@@ -628,9 +664,9 @@ private fun PeopleStripSection(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "@${creator.handle} · ${creator.status}",
+                                    text = "@${creator.handle} · ${if (creatorOnline) "Online" else "Offline"}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
+                                    color = if (creatorOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -676,6 +712,8 @@ private fun PeopleStripSection(
 @Composable
 private fun CreatorDirectoryRow(
     creator: CreatorProfile,
+    isOnline: Boolean,
+    onViewProfile: () -> Unit,
     onChat: () -> Unit,
     onAudioCall: () -> Unit,
     onVideoCall: () -> Unit
@@ -685,7 +723,7 @@ private fun CreatorDirectoryRow(
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onChat)
+            .clickable(onClick = onViewProfile)
             .testTag("creator_directory_row_${creator.userId}")
     ) {
         Row(
@@ -693,19 +731,14 @@ private fun CreatorDirectoryRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = creator.displayName.take(1).uppercase().ifBlank { "U" },
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+            UserAvatarWithStatus(
+                displayName = creator.displayName,
+                isOnline = isOnline,
+                avatarSize = 46.dp,
+                photoUrl = creator.photoUrl,
+                avatarBase64 = creator.avatarBase64,
+                indicatorTestTag = "directory_online_indicator_${creator.userId}"
+            )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = creator.displayName,
@@ -714,9 +747,9 @@ private fun CreatorDirectoryRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "@${creator.handle} · ${creator.status}",
+                    text = "@${creator.handle} · ${if (isOnline) "Online" else "Offline"}",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

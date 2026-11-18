@@ -71,8 +71,28 @@ test("Users PII isolation: owner can create/read own doc, cross-user read/write 
       pushCallAlerts: true,
       pushMessageAlerts: true,
       hdVideoDefault: true,
+      isOnline: true,
+      lastActiveAt: now,
       createdAt: now,
       updatedAt: now,
+    })
+  );
+
+  // Owner can update isOnline and lastActiveAt
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      isOnline: false,
+      lastActiveAt: new Date(Date.now() - 500),
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+
+  // Tampered future lastActiveAt rejected
+  await assertFails(
+    aliceDb.collection("users").doc(ALICE_UID).update({
+      isOnline: true,
+      lastActiveAt: new Date(Date.now() + 60000),
+      updatedAt: new Date(Date.now() - 200),
     })
   );
 
@@ -110,8 +130,33 @@ test("Creators directory: aligned list query succeeds, unfiltered list fails", a
       bio: "Audio & video creator",
       status: "online",
       isDiscoverable: true,
+      isOnline: true,
+      lastActiveAt: now,
+      photoUrl: "https://lh3.googleusercontent.com/a/alice-avatar",
       createdAt: now,
       updatedAt: now,
+    })
+  );
+
+  // Owner can update presence & profile photo fields; Bob cannot spoof Alice's online state or photo
+  await assertSucceeds(
+    aliceDb.collection("creators").doc(ALICE_UID).update({
+      isOnline: false,
+      avatarBase64: "dGVzdF9hdmF0YXJfYmFzZTY0",
+      lastActiveAt: new Date(Date.now() - 500),
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertFails(
+    bobDb.collection("creators").doc(ALICE_UID).update({
+      isOnline: true,
+      updatedAt: new Date(Date.now() - 300),
+    })
+  );
+  await assertFails(
+    bobDb.collection("creators").doc(ALICE_UID).update({
+      photoUrl: "https://evil.example.com/spoof.png",
+      updatedAt: new Date(Date.now() - 300),
     })
   );
 
@@ -274,6 +319,36 @@ test("Call sessions: join active room succeeds, terminal ended lock prevents fur
     })
   );
 
+  // Alice and Bob can exchange WebRTC signaling offers/answers while call is active; Charlie is blocked
+  await assertSucceeds(
+    aliceDb.collection("call_sessions").doc("PULSE-8842").collection("signals").doc("sig_offer_1").set({
+      callId: "PULSE-8842",
+      senderId: ALICE_UID,
+      recipientId: BOB_UID,
+      type: "offer",
+      sdp: "v=0\r\no=- 123 2 IN IP4 127.0.0.1\r\n",
+      createdAt: now,
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("call_sessions").doc("PULSE-8842").collection("signals")
+      .where("recipientId", "==", BOB_UID).get()
+  );
+  const charlieDb = getDb(testEnv.authenticatedContext(CHARLIE_UID));
+  await assertFails(
+    charlieDb.collection("call_sessions").doc("PULSE-8842").collection("signals").doc("sig_offer_1").get()
+  );
+  await assertFails(
+    charlieDb.collection("call_sessions").doc("PULSE-8842").collection("signals").doc("sig_spoof").set({
+      callId: "PULSE-8842",
+      senderId: CHARLIE_UID,
+      recipientId: BOB_UID,
+      type: "offer",
+      sdp: "v=0",
+      createdAt: now,
+    })
+  );
+
   // Alice ends the call
   await assertSucceeds(
     aliceDb.collection("call_sessions").doc("PULSE-8842").update({
@@ -283,11 +358,23 @@ test("Call sessions: join active room succeeds, terminal ended lock prevents fur
     })
   );
 
-  // Terminal state locking: cannot reactivate an ended call
+  // Terminal state locking: cannot reactivate an ended call or send new signals
   await assertFails(
     bobDb.collection("call_sessions").doc("PULSE-8842").update({
       status: "active",
       updatedAt: now,
+    })
+  );
+  await assertFails(
+    bobDb.collection("call_sessions").doc("PULSE-8842").collection("signals").doc("sig_after_end").set({
+      callId: "PULSE-8842",
+      senderId: BOB_UID,
+      recipientId: ALICE_UID,
+      type: "candidate",
+      candidate: "candidate:1 1 udp 2122260223 192.0.2.1 54400 typ host",
+      sdpMid: "0",
+      sdpMLineIndex: 0,
+      createdAt: now,
     })
   );
 });

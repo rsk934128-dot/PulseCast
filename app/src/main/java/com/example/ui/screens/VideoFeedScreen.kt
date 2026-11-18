@@ -74,6 +74,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.PublishedVideo
 import com.example.data.VideoComment
+import com.example.media.FirebaseStorageVideoUploader
 import com.example.media.PulseCastVideoPlayer
 import com.example.media.decodeBase64ToBitmap
 import com.example.media.formatDuration
@@ -90,10 +91,15 @@ fun VideoFeedScreen(
 ) {
     val videosState by viewModel.publicVideosState.collectAsStateWithLifecycle()
     val myVideosState by viewModel.myVideosState.collectAsStateWithLifecycle()
+    val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
     val selectedVideoId by viewModel.selectedVideoId.collectAsStateWithLifecycle()
     val comments by viewModel.selectedVideoComments.collectAsStateWithLifecycle()
     val isLiked by viewModel.isSelectedVideoLiked.collectAsStateWithLifecycle()
     val uploadState by viewModel.videoUploadState.collectAsStateWithLifecycle()
+
+    val creatorsById = remember(creatorsState) {
+        (creatorsState as? UiState.Success)?.data?.associateBy { it.userId }.orEmpty()
+    }
 
     var activeCategory by remember { mutableStateOf("All") }
     var showPublishDialog by remember { mutableStateOf(false) }
@@ -104,6 +110,7 @@ fun VideoFeedScreen(
     }
 
     if (selectedVideo != null) {
+        val authorProfile = creatorsById[selectedVideo.authorId]
         VideoDetailScreen(
             video = selectedVideo,
             isOwnedByUser = selectedVideo.authorId == viewModel.currentUserId,
@@ -115,6 +122,8 @@ fun VideoFeedScreen(
             onDelete = {
                 viewModel.deleteVideo(selectedVideo.id) { viewModel.selectVideo(null) }
             },
+            authorProfile = authorProfile,
+            onAuthorClick = { viewModel.openCreatorProfile(selectedVideo.authorId, selectedVideo.authorName) },
             modifier = modifier
         )
     } else {
@@ -182,8 +191,13 @@ fun VideoFeedScreen(
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 items(filtered, key = { it.id }) { video ->
+                                    val authorProfile = creatorsById[video.authorId]
                                     VideoFeedCard(
                                         video = video,
+                                        authorProfile = authorProfile,
+                                        onAuthorClick = {
+                                            viewModel.openCreatorProfile(video.authorId, video.authorName)
+                                        },
                                         onClick = { viewModel.selectVideo(video.id) }
                                     )
                                 }
@@ -245,6 +259,8 @@ fun VideoFeedScreen(
 @Composable
 private fun VideoFeedCard(
     video: PublishedVideo,
+    authorProfile: com.example.data.CreatorProfile? = null,
+    onAuthorClick: () -> Unit = {},
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
@@ -344,11 +360,37 @@ private fun VideoFeedCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = video.authorName,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onAuthorClick)
+                            .padding(vertical = 4.dp, horizontal = 2.dp)
+                            .testTag("feed_author_${video.id}")
+                    ) {
+                        val isAuthorOnline = authorProfile?.let {
+                            com.example.data.resolveIsUserOnline(
+                                isOnlineFlag = it.isOnline,
+                                lastActiveAt = it.lastActiveAt,
+                                updatedAt = it.updatedAt
+                            )
+                        } == true
+                        com.example.ui.components.UserAvatarWithStatus(
+                            displayName = video.authorName,
+                            isOnline = isAuthorOnline,
+                            avatarSize = 28.dp,
+                            photoUrl = authorProfile?.photoUrl,
+                            avatarBase64 = authorProfile?.avatarBase64
+                        )
+                        Text(
+                            text = video.authorName,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -479,7 +521,9 @@ internal fun VideoDetailScreen(
     onToggleLike: () -> Unit,
     onSendComment: (String) -> Unit,
     onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    authorProfile: com.example.data.CreatorProfile? = null,
+    onAuthorClick: (() -> Unit)? = null
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
@@ -524,9 +568,13 @@ internal fun VideoDetailScreen(
                         .aspectRatio(16f / 9f)
                         .background(Color.Black)
                 ) {
-                    if (!video.videoUri.isNullOrBlank()) {
+                    val playableVideoUri = remember(video.id, video.videoUri, context) {
+                        video.videoUri?.takeIf { it.isNotBlank() }
+                            ?: FirebaseStorageVideoUploader.resolveLocalVideoUri(context, video.id)
+                    }
+                    if (!playableVideoUri.isNullOrBlank()) {
                         PulseCastVideoPlayer(
-                            videoUri = video.videoUri,
+                            videoUri = playableVideoUri,
                             autoPlay = true,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -569,11 +617,45 @@ internal fun VideoDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(video.title, style = MaterialTheme.typography.headlineSmall)
-                    Text(
-                        text = "${video.authorName} · ${video.category} · ${formatDuration(video.durationSec)}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .then(
+                                if (onAuthorClick != null) Modifier.clickable(onClick = onAuthorClick)
+                                else Modifier
+                            )
+                            .padding(vertical = 4.dp)
+                            .testTag("video_detail_author_row")
+                    ) {
+                        val isAuthorOnline = authorProfile?.let {
+                            com.example.data.resolveIsUserOnline(
+                                isOnlineFlag = it.isOnline,
+                                lastActiveAt = it.lastActiveAt,
+                                updatedAt = it.updatedAt
+                            )
+                        } == true
+                        com.example.ui.components.UserAvatarWithStatus(
+                            displayName = video.authorName,
+                            isOnline = isAuthorOnline,
+                            avatarSize = 36.dp,
+                            photoUrl = authorProfile?.photoUrl,
+                            avatarBase64 = authorProfile?.avatarBase64
+                        )
+                        Column {
+                            Text(
+                                text = video.authorName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "${video.category} · ${formatDuration(video.durationSec)}${if (onAuthorClick != null) " · View Profile" else ""}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     if (!video.description.isNullOrBlank()) {
                         Text(
                             text = video.description,

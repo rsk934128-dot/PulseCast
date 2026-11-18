@@ -73,6 +73,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.ChatMessage
 import com.example.data.ChatThread
 import com.example.data.CreatorProfile
+import com.example.data.UserAccount
+import com.example.data.isRecentlyOnline
 import com.example.media.VoiceNoteRecorder
 import com.example.media.decodeBase64ToBitmap
 import com.example.media.encodeUriImageToBase64
@@ -80,10 +82,12 @@ import com.example.media.formatDuration
 import com.example.permissions.openPulseCastAppSettings
 import com.example.ui.PulseCastViewModel
 import com.example.ui.UiState
+import com.example.ui.components.UserAvatarWithStatus
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.shouldShowRationale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -96,6 +100,25 @@ fun MessagingScreen(
     val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
     val selectedChatId by viewModel.selectedChatId.collectAsStateWithLifecycle()
     val messages by viewModel.selectedChatMessages.collectAsStateWithLifecycle()
+    val selectedParticipants by viewModel.selectedChatParticipants.collectAsStateWithLifecycle()
+    val currentUserAccount by viewModel.userAccountState.collectAsStateWithLifecycle()
+
+    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000L)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
+
+    val participantProfiles = remember(creatorsState, selectedParticipants) {
+        buildMap {
+            (creatorsState as? UiState.Success)?.data?.forEach { profile ->
+                if (profile.userId.isNotBlank()) put(profile.userId, profile)
+            }
+            putAll(selectedParticipants)
+        }
+    }
 
     var showNewChatDialog by remember { mutableStateOf(false) }
 
@@ -108,6 +131,9 @@ fun MessagingScreen(
             chat = selectedChat,
             currentUserId = viewModel.currentUserId,
             messages = messages,
+            participantProfiles = participantProfiles,
+            currentUserAccount = currentUserAccount,
+            nowMillis = nowMillis,
             onBack = { viewModel.selectChat(null) },
             onMessagesSeen = { msgs -> viewModel.markMessagesRead(selectedChat.id, msgs) },
             onSendText = { text -> viewModel.sendMessage(selectedChat, "text", text) },
@@ -121,6 +147,7 @@ fun MessagingScreen(
                 viewModel.startCall(callType, linkedChat = selectedChat)
                 onNavigateToCall()
             },
+            onViewCreatorProfile = { uid, name -> viewModel.openCreatorProfile(uid, name) },
             modifier = modifier
         )
     } else {
@@ -133,6 +160,7 @@ fun MessagingScreen(
                 viewModel.startCall(callType, targetCreator = creator)
                 onNavigateToCall()
             },
+            onViewProfile = { creator -> viewModel.openCreatorProfile(creator) },
             modifier = modifier
         )
     }
@@ -143,6 +171,7 @@ fun MessagingScreen(
             ?: emptyList()
         NewChatDialog(
             creators = creators,
+            nowMillis = nowMillis,
             onDismiss = { showNewChatDialog = false },
             onCreate = { title, selectedCreators ->
                 val isGroup = selectedCreators.size > 1 || title.isNotBlank()
@@ -161,24 +190,27 @@ fun MessagingScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalPermissionsApi::class)
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 private fun ChatConversationScreen(
     chat: ChatThread,
     currentUserId: String,
     messages: List<ChatMessage>,
+    participantProfiles: Map<String, CreatorProfile>,
+    currentUserAccount: UserAccount?,
+    nowMillis: Long,
     onBack: () -> Unit,
     onMessagesSeen: (List<ChatMessage>) -> Unit,
     onSendText: (String) -> Unit,
     onSendImage: (String, String) -> Unit,
     onSendVoice: (Long) -> Unit,
     onStartCall: (String) -> Unit,
+    onViewCreatorProfile: ((String, String?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var messageDraft by remember { mutableStateOf("") }
     var isRecordingVoice by remember { mutableStateOf(false) }
     val voiceRecorder = remember(context) { VoiceNoteRecorder(context) }
 
@@ -213,18 +245,127 @@ private fun ChatConversationScreen(
         }
     }
 
+    ChatConversationContent(
+        chat = chat,
+        currentUserId = currentUserId,
+        messages = messages,
+        participantProfiles = participantProfiles,
+        currentUserAccount = currentUserAccount,
+        nowMillis = nowMillis,
+        isRecordingVoice = isRecordingVoice,
+        onBack = onBack,
+        onSendText = onSendText,
+        onPickImage = {
+            imagePicker.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        },
+        onToggleVoiceRecord = {
+            if (isRecordingVoice) {
+                val sec = voiceRecorder.stopRecording()
+                isRecordingVoice = false
+                onSendVoice(sec)
+            } else if (micPermissionState.status.isGranted) {
+                isRecordingVoice = voiceRecorder.startRecording()
+            } else if (requestedVoicePermission && !micPermissionState.status.shouldShowRationale) {
+                openPulseCastAppSettings(context)
+            } else {
+                micPermissionState.launchPermissionRequest()
+            }
+        },
+        onPlayVoice = { voiceRecorder.playLastOrStop {} },
+        onStartCall = onStartCall,
+        onViewCreatorProfile = onViewCreatorProfile,
+        modifier = modifier
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ChatConversationContent(
+    chat: ChatThread,
+    currentUserId: String,
+    messages: List<ChatMessage>,
+    participantProfiles: Map<String, CreatorProfile>,
+    currentUserAccount: UserAccount? = null,
+    nowMillis: Long = System.currentTimeMillis(),
+    isRecordingVoice: Boolean = false,
+    onBack: () -> Unit,
+    onSendText: (String) -> Unit,
+    onPickImage: () -> Unit,
+    onToggleVoiceRecord: () -> Unit,
+    onPlayVoice: () -> Unit,
+    onStartCall: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    onViewCreatorProfile: ((String, String?) -> Unit)? = null
+) {
+    var messageDraft by remember { mutableStateOf("") }
+    val peerIds = remember(chat.participantIds, currentUserId) {
+        chat.participantIds.filter { it != currentUserId }
+    }
+    val selfIsOnline = remember(currentUserAccount, participantProfiles, currentUserId, nowMillis) {
+        (currentUserAccount?.isRecentlyOnline(nowMillis) == true) ||
+            (participantProfiles[currentUserId]?.isRecentlyOnline(nowMillis) == true)
+    }
+    val onlinePeerCount = remember(peerIds, participantProfiles, nowMillis) {
+        peerIds.count { uid -> participantProfiles[uid]?.isRecentlyOnline(nowMillis) == true }
+    }
+    val headerIsOnline = if (peerIds.isNotEmpty()) onlinePeerCount > 0 else selfIsOnline
+    val headerSubtitle = remember(chat.isGroup, peerIds, onlinePeerCount, headerIsOnline, chat.participantIds.size) {
+        when {
+            !chat.isGroup && peerIds.isNotEmpty() ->
+                if (headerIsOnline) "Online · Encrypted sync" else "Offline · Encrypted sync"
+            chat.isGroup ->
+                "$onlinePeerCount online · ${chat.participantIds.size} participant(s)"
+            else ->
+                if (headerIsOnline) "Online · Studio notes" else "Offline · Studio notes"
+        }
+    }
+
+    val headerPeerProfile = remember(chat.isGroup, peerIds, participantProfiles) {
+        if (chat.isGroup) null else peerIds.firstOrNull()?.let { participantProfiles[it] }
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(chat.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            text = "${chat.participantIds.size} participant(s) · Encrypted sync",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    val headerTargetId = if (!chat.isGroup) peerIds.firstOrNull() else null
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = if (headerTargetId != null && onViewCreatorProfile != null) {
+                            Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onViewCreatorProfile(headerTargetId, chat.title) }
+                                .padding(vertical = 2.dp, horizontal = 2.dp)
+                                .testTag("chat_header_profile_button")
+                        } else {
+                            Modifier
+                        }
+                    ) {
+                        UserAvatarWithStatus(
+                            displayName = chat.title,
+                            isOnline = headerIsOnline,
+                            avatarSize = 38.dp,
+                            isGroup = chat.isGroup,
+                            photoUrl = headerPeerProfile?.photoUrl,
+                            avatarBase64 = headerPeerProfile?.avatarBase64,
+                            indicatorTestTag = "chat_header_online_indicator"
                         )
+                        Column {
+                            Text(chat.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                text = headerSubtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (headerIsOnline) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -262,10 +403,24 @@ private fun ChatConversationScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(messages, key = { it.id }) { msg ->
+                    val senderProfile = participantProfiles[msg.senderId]
+                    val senderIsOnline = if (msg.senderId == currentUserId) {
+                        selfIsOnline
+                    } else {
+                        senderProfile?.isRecentlyOnline(nowMillis) == true
+                    }
                     MessageBubble(
                         message = msg,
                         isMine = msg.senderId == currentUserId,
-                        onPlayVoice = { voiceRecorder.playLastOrStop {} }
+                        senderIsOnline = senderIsOnline,
+                        senderPhotoUrl = senderProfile?.photoUrl,
+                        senderAvatarBase64 = senderProfile?.avatarBase64,
+                        onAvatarClick = if (msg.senderId != currentUserId && onViewCreatorProfile != null) {
+                            { onViewCreatorProfile(msg.senderId, msg.senderName) }
+                        } else {
+                            null
+                        },
+                        onPlayVoice = onPlayVoice
                     )
                 }
             }
@@ -281,30 +436,14 @@ private fun ChatConversationScreen(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     IconButton(
-                        onClick = {
-                            imagePicker.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
+                        onClick = onPickImage,
                         modifier = Modifier.testTag("chat_pick_image_button")
                     ) {
                         Icon(Icons.Filled.Image, contentDescription = "Send photo")
                     }
 
                     IconButton(
-                        onClick = {
-                            if (isRecordingVoice) {
-                                val sec = voiceRecorder.stopRecording()
-                                isRecordingVoice = false
-                                onSendVoice(sec)
-                            } else if (micPermissionState.status.isGranted) {
-                                isRecordingVoice = voiceRecorder.startRecording()
-                            } else if (requestedVoicePermission && !micPermissionState.status.shouldShowRationale) {
-                                openPulseCastAppSettings(context)
-                            } else {
-                                micPermissionState.launchPermissionRequest()
-                            }
-                        },
+                        onClick = onToggleVoiceRecord,
                         modifier = Modifier.testTag("chat_voice_button")
                     ) {
                         Icon(
@@ -351,6 +490,10 @@ private fun ChatConversationScreen(
 private fun MessageBubble(
     message: ChatMessage,
     isMine: Boolean,
+    senderIsOnline: Boolean,
+    senderPhotoUrl: String? = null,
+    senderAvatarBase64: String? = null,
+    onAvatarClick: (() -> Unit)? = null,
     onPlayVoice: () -> Unit
 ) {
     if (message.messageType == "call_event") {
@@ -385,8 +528,22 @@ private fun MessageBubble(
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom
     ) {
+        if (!isMine) {
+            UserAvatarWithStatus(
+                displayName = message.senderName,
+                isOnline = senderIsOnline,
+                avatarSize = 32.dp,
+                photoUrl = senderPhotoUrl,
+                avatarBase64 = senderAvatarBase64,
+                onClick = onAvatarClick,
+                indicatorTestTag = "message_avatar_online_indicator_${message.id}"
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+
         Surface(
             color = bubbleColor,
             shape = RoundedCornerShape(
@@ -395,7 +552,7 @@ private fun MessageBubble(
                 bottomStart = if (isMine) 18.dp else 4.dp,
                 bottomEnd = if (isMine) 4.dp else 18.dp
             ),
-            modifier = Modifier.widthIn(max = 290.dp)
+            modifier = Modifier.widthIn(max = 276.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 if (!isMine) {
@@ -466,6 +623,7 @@ private fun MessageBubble(
 @Composable
 private fun NewChatDialog(
     creators: List<CreatorProfile>,
+    nowMillis: Long,
     onDismiss: () -> Unit,
     onCreate: (title: String, selectedCreators: List<CreatorProfile>) -> Unit
 ) {
@@ -527,6 +685,15 @@ private fun NewChatDialog(
                                         else selectedIds.remove(creator.userId)
                                     }
                                 )
+                                UserAvatarWithStatus(
+                                    displayName = creator.displayName,
+                                    isOnline = creator.isRecentlyOnline(nowMillis),
+                                    avatarSize = 30.dp,
+                                    photoUrl = creator.photoUrl,
+                                    avatarBase64 = creator.avatarBase64,
+                                    indicatorTestTag = "new_chat_avatar_online_${creator.userId}"
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text("${creator.displayName} (@${creator.handle})", style = MaterialTheme.typography.bodyMedium)
                             }
                         }

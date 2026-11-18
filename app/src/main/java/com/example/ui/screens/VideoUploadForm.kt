@@ -55,7 +55,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -354,6 +356,12 @@ fun VideoUploadFormContent(
             )
         }
     ) { innerPadding ->
+        val formScrollState = rememberScrollState()
+        LaunchedEffect(uploadState) {
+            if (uploadState is VideoUploadUiState.Error) {
+                formScrollState.animateScrollTo(formScrollState.maxValue)
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -364,7 +372,7 @@ fun VideoUploadFormContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .widthIn(max = 600.dp)
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(formScrollState)
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -710,11 +718,13 @@ fun VideoUploadFormContent(
                                 tint = MaterialTheme.colorScheme.onErrorContainer
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = uploadState.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
+                            SelectionContainer {
+                                Text(
+                                    text = uploadState.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
                         }
                     }
                 }

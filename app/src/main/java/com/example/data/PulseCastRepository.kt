@@ -5,6 +5,7 @@ import android.net.Uri
 import com.example.R
 import com.example.media.FirebaseStorageVideoUploader
 import com.example.media.VideoFileUploader
+import com.example.media.VideoUploadOutcome
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -12,8 +13,10 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
@@ -37,26 +40,38 @@ class PulseCastRepository(
     suspend fun ensureUserAndCreatorInitialized(
         uid: String,
         displayName: String,
-        email: String
+        email: String,
+        photoUrl: String? = null
     ): Result<Unit> = runCatching {
         val safeName = displayName.trim().ifBlank { "PulseCast Creator" }.take(60)
         val safeEmail = email.trim().ifBlank { "$uid@pulsecast.app" }.take(254)
+        val cleanPhotoUrl = photoUrl?.trim()?.takeIf { it.isNotEmpty() }?.take(2000)
         val userRef = db.collection("users").document(uid)
         try {
             val userSnap = userRef.get().await()
             if (!userSnap.exists()) {
-                userRef.set(
-                    mapOf(
-                        "userId" to uid,
-                        "email" to safeEmail,
-                        "displayName" to safeName,
-                        "pushCallAlerts" to true,
-                        "pushMessageAlerts" to true,
-                        "hdVideoDefault" to true,
-                        "createdAt" to FieldValue.serverTimestamp(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
+                val payload = buildMap<String, Any> {
+                    put("userId", uid)
+                    put("email", safeEmail)
+                    put("displayName", safeName)
+                    put("pushCallAlerts", true)
+                    put("pushMessageAlerts", true)
+                    put("hdVideoDefault", true)
+                    put("isOnline", true)
+                    if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
+                    put("lastActiveAt", FieldValue.serverTimestamp())
+                    put("createdAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                userRef.set(payload).await()
+            } else {
+                val updates = buildMap<String, Any> {
+                    put("isOnline", true)
+                    if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
+                    put("lastActiveAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                userRef.update(updates).await()
             }
         } catch (e: CancellationException) {
             throw e
@@ -74,18 +89,28 @@ class PulseCastRepository(
                     .ifBlank { "creator" }
                     .take(20)
                 val suffix = uid.take(4).lowercase()
-                creatorRef.set(
-                    mapOf(
-                        "userId" to uid,
-                        "displayName" to safeName,
-                        "handle" to "${baseHandle}_$suffix",
-                        "bio" to "Audio, video & live studio creator on PulseCast",
-                        "status" to "online",
-                        "isDiscoverable" to true,
-                        "createdAt" to FieldValue.serverTimestamp(),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
+                val payload = buildMap<String, Any> {
+                    put("userId", uid)
+                    put("displayName", safeName)
+                    put("handle", "${baseHandle}_$suffix")
+                    put("bio", "Audio, video & live studio creator on PulseCast")
+                    put("status", "online")
+                    put("isDiscoverable", true)
+                    put("isOnline", true)
+                    if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
+                    put("lastActiveAt", FieldValue.serverTimestamp())
+                    put("createdAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                creatorRef.set(payload).await()
+            } else {
+                val updates = buildMap<String, Any> {
+                    put("isOnline", true)
+                    if (cleanPhotoUrl != null) put("photoUrl", cleanPhotoUrl)
+                    put("lastActiveAt", FieldValue.serverTimestamp())
+                    put("updatedAt", FieldValue.serverTimestamp())
+                }
+                creatorRef.update(updates).await()
             }
         } catch (e: CancellationException) {
             throw e
@@ -112,6 +137,61 @@ class PulseCastRepository(
                     .sortedBy { it.displayName.lowercase() }
             }
         )
+    }
+
+    fun observeCreatorPresence(userIds: List<String>): Flow<Map<String, CreatorProfile>> {
+        val cleanIds = userIds.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(20)
+        if (cleanIds.isEmpty()) return flowOf(emptyMap())
+        val docFlows = cleanIds.map { peerUid ->
+            db.collection("creators").document(peerUid)
+                .snapshots()
+                .map { snap ->
+                    snap.toObject(
+                        CreatorProfile::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )?.let { profile -> peerUid to profile }
+                }
+        }
+        return combine(docFlows) { entries ->
+            buildMap {
+                entries.forEach { entry ->
+                    if (entry != null) put(entry.first, entry.second)
+                }
+            }
+        }
+    }
+
+    suspend fun updateUserActivity(uid: String, isOnline: Boolean): Result<Unit> = runCatching {
+        if (uid.isBlank()) throw IllegalArgumentException("User ID must not be blank.")
+        val userRef = db.collection("users").document(uid)
+        val creatorRef = db.collection("creators").document(uid)
+        val updates = mapOf(
+            "isOnline" to isOnline,
+            "lastActiveAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        try {
+            val userSnap = userRef.get().await()
+            val creatorSnap = creatorRef.get().await()
+            val batch = db.batch()
+            var hasUpdates = false
+            if (userSnap.exists()) {
+                batch.update(userRef, updates)
+                hasUpdates = true
+            }
+            if (creatorSnap.exists()) {
+                batch.update(creatorRef, updates)
+                hasUpdates = true
+            }
+            if (hasUpdates) {
+                batch.commit().await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, userRef.path)
+            throw e
+        }
     }
 
     suspend fun updateUserPreferences(
@@ -167,6 +247,47 @@ class PulseCastRepository(
         }
     }
 
+    suspend fun updateProfilePhoto(
+        uid: String,
+        avatarBase64: String?,
+        photoUrl: String? = null
+    ): Result<Unit> = runCatching {
+        if (uid.isBlank()) throw IllegalArgumentException("User ID must not be blank.")
+        val cleanBase64 = avatarBase64?.takeIf { it.isNotBlank() && it.length <= 250000 }
+        val cleanPhotoUrl = photoUrl?.trim()?.takeIf { it.isNotEmpty() }?.take(2000)
+        val updates = mutableMapOf<String, Any?>(
+            "avatarBase64" to cleanBase64,
+            "updatedAt" to FieldValue.serverTimestamp()
+        )
+        if (cleanPhotoUrl != null) {
+            updates["photoUrl"] = cleanPhotoUrl
+        }
+        val userRef = db.collection("users").document(uid)
+        val creatorRef = db.collection("creators").document(uid)
+        try {
+            val userSnap = userRef.get().await()
+            val creatorSnap = creatorRef.get().await()
+            val batch = db.batch()
+            var hasUpdates = false
+            if (creatorSnap.exists()) {
+                batch.update(creatorRef, updates)
+                hasUpdates = true
+            }
+            if (userSnap.exists()) {
+                batch.update(userRef, updates)
+                hasUpdates = true
+            }
+            if (hasUpdates) {
+                batch.commit().await()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, creatorRef.path)
+            throw e
+        }
+    }
+
     // --- Video Publishing System ---
 
     fun observePublicVideos(): Flow<List<PublishedVideo>> = flow {
@@ -202,24 +323,35 @@ class PulseCastRepository(
         thumbnailBase64: String?,
         visibility: String,
         durationSec: Long,
-        onStageChange: (VideoUploadStage) -> Unit = {}
+        onStageChange: (VideoUploadStage) -> Unit = {},
+        onCloudFallbackUsed: () -> Unit = {}
     ): Result<String> = runCatching {
         val docRef = db.collection("videos").document()
         var uploadedStorageUrl: String? = null
+        val fallbackExternalUrl = externalVideoUrl?.trim()?.takeIf { it.isNotEmpty() }?.take(2000)
         val resolvedVideoUri = if (localVideoUri != null) {
             onStageChange(VideoUploadStage.UploadingMedia(0f))
-            val downloadUrl = videoUploader.uploadVideo(
-                uid = uid,
-                videoId = docRef.id,
-                localUri = localVideoUri,
-                mimeType = mimeType
-            ) { progress ->
-                onStageChange(VideoUploadStage.UploadingMedia(progress))
+            when (
+                val outcome = videoUploader.uploadVideo(
+                    uid = uid,
+                    videoId = docRef.id,
+                    localUri = localVideoUri,
+                    mimeType = mimeType
+                ) { progress ->
+                    onStageChange(VideoUploadStage.UploadingMedia(progress))
+                }
+            ) {
+                is VideoUploadOutcome.CloudUploaded -> {
+                    uploadedStorageUrl = outcome.downloadUrl
+                    outcome.downloadUrl
+                }
+                is VideoUploadOutcome.LocalDeviceOnly -> {
+                    onCloudFallbackUsed()
+                    fallbackExternalUrl
+                }
             }
-            uploadedStorageUrl = downloadUrl
-            downloadUrl
         } else {
-            externalVideoUrl?.trim()?.takeIf { it.isNotEmpty() }?.take(2000)
+            fallbackExternalUrl
         }
 
         onStageChange(VideoUploadStage.SavingMetadata)
@@ -318,6 +450,7 @@ class PulseCastRepository(
         try {
             val videoUri = runCatching { docRef.get().await().getString("videoUri") }.getOrNull()
             docRef.delete().await()
+            videoUploader.deleteLocalCopy(videoId)
             if (!videoUri.isNullOrBlank()) {
                 videoUploader.deleteByDownloadUrl(videoUri)
             }
@@ -682,6 +815,58 @@ class PulseCastRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            throw e
+        }
+    }
+
+    suspend fun declineCallSession(callId: String): Result<Unit> = endCallSession(callId, 0L)
+
+    fun observeCallSignals(callId: String, recipientUid: String): Flow<List<CallSignal>> = flow {
+        val query = db.collection("call_sessions").document(callId)
+            .collection("signals")
+            .whereEqualTo("recipientId", recipientUid)
+        emitAll(
+            query.snapshots().map { snap ->
+                snap.toObjects(CallSignal::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    .sortedBy { it.createdAt ?: Timestamp(Long.MAX_VALUE / 2, 0) }
+            }
+        )
+    }
+
+    suspend fun sendCallSignal(
+        callId: String,
+        senderId: String,
+        recipientId: String,
+        type: String,
+        sdp: String? = null,
+        sdpMid: String? = null,
+        sdpMLineIndex: Int? = null,
+        candidate: String? = null
+    ): Result<String> = runCatching {
+        val normalizedCallId = callId.trim().uppercase().replace(Regex("[^A-Z0-9\\-]"), "")
+        require(normalizedCallId.length in 4..32) { "Invalid callId for signaling." }
+        val signalRef = db.collection("call_sessions")
+            .document(normalizedCallId)
+            .collection("signals")
+            .document()
+        val payload = buildMap<String, Any> {
+            put("callId", normalizedCallId)
+            put("senderId", senderId)
+            put("recipientId", recipientId)
+            put("type", type)
+            if (sdp != null) put("sdp", sdp.take(32768))
+            if (sdpMid != null) put("sdpMid", sdpMid.take(64))
+            if (sdpMLineIndex != null) put("sdpMLineIndex", sdpMLineIndex.coerceIn(0, 32))
+            if (candidate != null) put("candidate", candidate.take(2048))
+            put("createdAt", FieldValue.serverTimestamp())
+        }
+        try {
+            signalRef.set(payload).await()
+            signalRef.id
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, signalRef.path)
             throw e
         }
     }

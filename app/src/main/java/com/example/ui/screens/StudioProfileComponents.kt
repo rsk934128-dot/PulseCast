@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,7 +65,11 @@ internal fun ProfileHeaderCard(
     photoUrl: String?,
     isEditing: Boolean,
     onToggleEdit: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    avatarBase64: String? = null,
+    isOnline: Boolean = true,
+    onAvatarClick: (() -> Unit)? = null,
+    onChangePhotoClick: (() -> Unit)? = null
 ) {
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -82,27 +88,16 @@ internal fun ProfileHeaderCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = displayName.trim().take(1).ifBlank { "P" }.uppercase(),
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    if (!photoUrl.isNullOrBlank()) {
-                        AsyncImage(
-                            model = photoUrl,
-                            contentDescription = "$displayName profile photo",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
+                com.example.ui.components.UserAvatarWithStatus(
+                    displayName = displayName,
+                    isOnline = isOnline,
+                    avatarSize = 68.dp,
+                    photoUrl = photoUrl,
+                    avatarBase64 = avatarBase64,
+                    onClick = onAvatarClick,
+                    avatarTestTag = "profile_avatar_image",
+                    indicatorTestTag = "profile_online_indicator"
+                )
                 Spacer(modifier = Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -153,30 +148,130 @@ internal fun ProfileHeaderCard(
             }
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    shape = RoundedCornerShape(8.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = status.replace('_', ' ').replaceFirstChar { it.uppercase() },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = status.replace('_', ' ').replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            text = "Creator Account",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
                 }
+
+                if (onChangePhotoClick != null) {
+                    TextButton(
+                        onClick = onChangePhotoClick,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("profile_change_photo_button")
+                    ) {
+                        Text(stringResource(R.string.profile_change_photo))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun CreatorProfilesStrip(
+    creators: List<com.example.data.CreatorProfile>,
+    nowMillis: Long,
+    onCreatorClick: (com.example.data.CreatorProfile) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (creators.isEmpty()) return
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("studio_creators_strip"),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${stringResource(R.string.creator_profile_directory_title)} (${creators.size})",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Tap to view profile",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(
+                items = creators,
+                key = { it.userId }
+            ) { creator ->
+                val isOnline = com.example.data.resolveIsUserOnline(
+                    isOnlineFlag = creator.isOnline,
+                    lastActiveAt = creator.lastActiveAt,
+                    updatedAt = creator.updatedAt,
+                    nowMillis = nowMillis
+                )
                 Surface(
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(8.dp)
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .width(124.dp)
+                        .clickable { onCreatorClick(creator) }
+                        .testTag("studio_creator_card_${creator.userId}")
                 ) {
-                    Text(
-                        text = "Creator Account",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        com.example.ui.components.UserAvatarWithStatus(
+                            displayName = creator.displayName,
+                            isOnline = isOnline,
+                            avatarSize = 54.dp,
+                            photoUrl = creator.photoUrl,
+                            avatarBase64 = creator.avatarBase64,
+                            indicatorTestTag = "studio_creator_online_${creator.userId}"
+                        )
+                        Text(
+                            text = creator.displayName,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "@${creator.handle}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }

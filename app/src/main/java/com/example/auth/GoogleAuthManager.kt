@@ -240,10 +240,12 @@ fun onGoogleSignInClicked(
 fun signOutUser(
     credentialManager: CredentialManager,
     scope: CoroutineScope,
+    onBeforeSignOut: suspend () -> Unit = {},
     onSignOutComplete: () -> Unit = {}
 ) {
     scope.launch {
         withContext(NonCancellable) {
+            runCatching { onBeforeSignOut() }
             try {
                 credentialManager.clearCredentialState(ClearCredentialStateRequest())
             } catch (e: Exception) {

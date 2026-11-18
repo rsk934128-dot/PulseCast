@@ -86,6 +86,10 @@ service cloud.firestore {
              (!('pushCallAlerts' in data) || data.pushCallAlerts == null || data.pushCallAlerts is bool) &&
              (!('pushMessageAlerts' in data) || data.pushMessageAlerts == null || data.pushMessageAlerts is bool) &&
              (!('hdVideoDefault' in data) || data.hdVideoDefault == null || data.hdVideoDefault is bool) &&
+             (!('isOnline' in data) || data.isOnline == null || data.isOnline is bool) &&
+             (!('lastActiveAt' in data) || data.lastActiveAt == null || isValidTimestamp(data.lastActiveAt)) &&
+             (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 2000)) &&
+             (!('avatarBase64' in data) || data.avatarBase64 == null || (data.avatarBase64 is string && data.avatarBase64.size() <= 250000)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -98,7 +102,7 @@ service cloud.firestore {
                        isValidId(userId) &&
                        request.auth.uid == userId &&
                        incoming().keys().hasAll(['userId', 'email', 'displayName', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'email', 'displayName', 'pushCallAlerts', 'pushMessageAlerts', 'hdVideoDefault', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'email', 'displayName', 'pushCallAlerts', 'pushMessageAlerts', 'hdVideoDefault', 'isOnline', 'lastActiveAt', 'photoUrl', 'avatarBase64', 'createdAt', 'updatedAt']) &&
                        isValidUserAccount(incoming()) &&
                        incoming().userId == request.auth.uid;
 
@@ -108,7 +112,7 @@ service cloud.firestore {
                        isValidUserAccount(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'pushCallAlerts', 'pushMessageAlerts', 'hdVideoDefault', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'pushCallAlerts', 'pushMessageAlerts', 'hdVideoDefault', 'isOnline', 'lastActiveAt', 'photoUrl', 'avatarBase64', 'updatedAt']);
 
       allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
     }
@@ -121,6 +125,10 @@ service cloud.firestore {
              data.isDiscoverable is bool &&
              (!('bio' in data) || data.bio == null || (data.bio is string && data.bio.size() <= 240)) &&
              (!('status' in data) || data.status == null || (data.status is string && data.status in ['online', 'in_call', 'studio', 'away'])) &&
+             (!('isOnline' in data) || data.isOnline == null || data.isOnline is bool) &&
+             (!('lastActiveAt' in data) || data.lastActiveAt == null || isValidTimestamp(data.lastActiveAt)) &&
+             (!('photoUrl' in data) || data.photoUrl == null || (data.photoUrl is string && data.photoUrl.size() <= 2000)) &&
+             (!('avatarBase64' in data) || data.avatarBase64 == null || (data.avatarBase64 is string && data.avatarBase64.size() <= 250000)) &&
              isValidTimestamp(data.createdAt) &&
              isValidTimestamp(data.updatedAt);
     }
@@ -133,7 +141,7 @@ service cloud.firestore {
                        isValidId(creatorId) &&
                        request.auth.uid == creatorId &&
                        incoming().keys().hasAll(['userId', 'displayName', 'handle', 'isDiscoverable', 'createdAt', 'updatedAt']) &&
-                       incoming().keys().hasOnly(['userId', 'displayName', 'handle', 'bio', 'status', 'isDiscoverable', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'handle', 'bio', 'status', 'isDiscoverable', 'isOnline', 'lastActiveAt', 'photoUrl', 'avatarBase64', 'createdAt', 'updatedAt']) &&
                        isValidCreatorProfile(incoming()) &&
                        incoming().userId == request.auth.uid;
 
@@ -143,7 +151,7 @@ service cloud.firestore {
                        isValidCreatorProfile(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'handle', 'bio', 'status', 'isDiscoverable', 'updatedAt']);
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'handle', 'bio', 'status', 'isDiscoverable', 'isOnline', 'lastActiveAt', 'photoUrl', 'avatarBase64', 'updatedAt']);
 
       allow delete: if isSignedIn() && isValidId(creatorId) && (request.auth.uid == creatorId || isAdmin());
     }
@@ -367,6 +375,44 @@ service cloud.firestore {
                        );
 
       allow delete: if isSignedIn() && isValidId(callId) && (existing().hostId == request.auth.uid || isAdmin());
+
+      function isValidCallSignal(data) {
+        return data.callId is string && data.callId == callId &&
+               data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
+               data.recipientId is string && data.recipientId.size() >= 1 && data.recipientId.size() <= 128 &&
+               data.type is string && data.type in ['offer', 'answer', 'candidate'] &&
+               (!('sdp' in data) || data.sdp == null || (data.sdp is string && data.sdp.size() <= 32768)) &&
+               (!('sdpMid' in data) || data.sdpMid == null || (data.sdpMid is string && data.sdpMid.size() <= 64)) &&
+               (!('sdpMLineIndex' in data) || data.sdpMLineIndex == null || (data.sdpMLineIndex is int && data.sdpMLineIndex >= 0 && data.sdpMLineIndex <= 32)) &&
+               (!('candidate' in data) || data.candidate == null || (data.candidate is string && data.candidate.size() <= 2048)) &&
+               isValidTimestamp(data.createdAt);
+      }
+
+      match /signals/{signalId} {
+        allow get, list: if isSignedIn() &&
+                             isValidId(callId) &&
+                             exists(/databases/$(database)/documents/call_sessions/$(callId)) &&
+                             (request.auth.uid in get(/databases/$(database)/documents/call_sessions/$(callId)).data.participantIds);
+
+        allow create: if isSignedIn() &&
+                         isValidId(callId) &&
+                         isValidId(signalId) &&
+                         incoming().keys().hasAll(['callId', 'senderId', 'recipientId', 'type', 'createdAt']) &&
+                         incoming().keys().hasOnly(['callId', 'senderId', 'recipientId', 'type', 'sdp', 'sdpMid', 'sdpMLineIndex', 'candidate', 'createdAt']) &&
+                         isValidCallSignal(incoming()) &&
+                         incoming().senderId == request.auth.uid &&
+                         exists(/databases/$(database)/documents/call_sessions/$(callId)) &&
+                         (request.auth.uid in get(/databases/$(database)/documents/call_sessions/$(callId)).data.participantIds) &&
+                         get(/databases/$(database)/documents/call_sessions/$(callId)).data.status != 'ended';
+
+        allow update: if false;
+        allow delete: if isSignedIn() &&
+                         isValidId(callId) &&
+                         isValidId(signalId) &&
+                         (existing().senderId == request.auth.uid ||
+                          (exists(/databases/$(database)/documents/call_sessions/$(callId)) &&
+                           get(/databases/$(database)/documents/call_sessions/$(callId)).data.hostId == request.auth.uid));
+      }
     }
   }
 }

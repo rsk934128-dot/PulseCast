@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
@@ -15,18 +16,24 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.test.core.app.ApplicationProvider
 import com.example.media.FirebaseStorageVideoUploader
+import com.example.media.VideoUploadOutcome
 import com.example.media.formatFileSize
 import com.example.ui.VideoUploadUiState
 import com.example.ui.theme.PulseCastTheme
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -249,5 +256,34 @@ class VideoUploadFormTest {
             error("Should not initialize FirebaseStorage for non-Storage URLs")
         }
         uploader.deleteByDownloadUrl("https://cdn.example.com/public.mp4")
+
+        val rawNotFound = IllegalStateException("Object does not exist at location.")
+        assertTrue(FirebaseStorageVideoUploader.isBucketOrObjectNotFound(rawNotFound))
+        val mapped = FirebaseStorageVideoUploader.mapFriendlyStorageException(rawNotFound, "gen-lang-client-0094828632")
+        assertTrue(mapped.message?.contains("Firebase Storage is not enabled") == true)
+    }
+
+    @Test
+    fun localFallback_resolvesAndDeletesSavedVideoCopy() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val videoId = "vid_local_test_42"
+        val localDir = File(context.filesDir, FirebaseStorageVideoUploader.LOCAL_VIDEOS_DIR).apply { mkdirs() }
+        val targetFile = File(localDir, "$videoId.${FirebaseStorageVideoUploader.extensionForMime("video/quicktime")}")
+        targetFile.writeBytes(byteArrayOf(1, 2, 3, 4))
+
+        val resolvedUri = FirebaseStorageVideoUploader.resolveLocalVideoUri(context, videoId)
+        assertNotNull(resolvedUri)
+        assertTrue(resolvedUri!!.endsWith("$videoId.mov"))
+
+        val outcome = VideoUploadOutcome.LocalDeviceOnly(targetFile.absolutePath)
+        assertEquals(targetFile.absolutePath, outcome.localFilePath)
+
+        val uploader = FirebaseStorageVideoUploader(appContext = context) {
+            error("Should not initialize FirebaseStorage when cleaning up local copy")
+        }
+        uploader.deleteLocalCopy(videoId)
+
+        assertFalse(targetFile.exists())
+        assertNull(FirebaseStorageVideoUploader.resolveLocalVideoUri(context, videoId))
     }
 }
