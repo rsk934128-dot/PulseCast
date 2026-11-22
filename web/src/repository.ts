@@ -18,6 +18,7 @@ import { db, storage } from "./firebase";
 import type {
   AdminRecord,
   CallSession,
+  CallSignal,
   ChatMessage,
   ChatThread,
   CreatorProfile,
@@ -31,18 +32,33 @@ function requireDb() {
   return db;
 }
 
-function toTimestampMillis(ts?: { toMillis?: () => number } | null): number {
+export function toTimestampMillis(ts?: { toMillis?: () => number } | null): number {
   return ts && typeof ts.toMillis === "function" ? ts.toMillis() : 0;
+}
+
+export function resolveIsUserOnline(
+  isOnlineFlag?: boolean | null,
+  lastActiveAt?: { toMillis?: () => number } | null,
+  updatedAt?: { toMillis?: () => number } | null,
+  nowMs: number = Date.now(),
+  windowMs: number = 5 * 60 * 1000
+): boolean {
+  if (!isOnlineFlag) return false;
+  const refMs = toTimestampMillis(lastActiveAt) || toTimestampMillis(updatedAt);
+  if (!refMs) return true;
+  return nowMs - refMs <= windowMs;
 }
 
 export async function ensureUserAndCreatorInitialized(
   uid: string,
   displayName: string,
-  email: string
+  email: string,
+  photoUrl?: string | null
 ): Promise<void> {
   const firestore = requireDb();
   const safeName = (displayName || "").trim().slice(0, 60) || "PulseCast Creator";
   const safeEmail = (email || "").trim().slice(0, 254) || `${uid}@pulsecast.app`;
+  const cleanPhotoUrl = photoUrl?.trim().slice(0, 2000) || null;
 
   const userRef = doc(firestore, "users", uid);
   const userSnap = await getDoc(userRef);
@@ -54,7 +70,17 @@ export async function ensureUserAndCreatorInitialized(
       pushCallAlerts: true,
       pushMessageAlerts: true,
       hdVideoDefault: true,
+      isOnline: true,
+      ...(cleanPhotoUrl ? { photoUrl: cleanPhotoUrl } : {}),
+      lastActiveAt: serverTimestamp(),
       createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  } else {
+    await updateDoc(userRef, {
+      isOnline: true,
+      ...(cleanPhotoUrl ? { photoUrl: cleanPhotoUrl } : {}),
+      lastActiveAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
   }
@@ -74,9 +100,79 @@ export async function ensureUserAndCreatorInitialized(
       bio: "Audio, video & live studio creator on PulseCast",
       status: "online",
       isDiscoverable: true,
+      isOnline: true,
+      ...(cleanPhotoUrl ? { photoUrl: cleanPhotoUrl } : {}),
+      lastActiveAt: serverTimestamp(),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
+  } else {
+    await updateDoc(creatorRef, {
+      isOnline: true,
+      ...(cleanPhotoUrl ? { photoUrl: cleanPhotoUrl } : {}),
+      lastActiveAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+  }
+}
+
+export async function updateUserActivity(uid: string, isOnline: boolean): Promise<void> {
+  if (!uid || !db) return;
+  const userRef = doc(db, "users", uid);
+  const creatorRef = doc(db, "creators", uid);
+  const updates = {
+    isOnline,
+    lastActiveAt: serverTimestamp(),
+    updatedAt: serverTimestamp()
+  };
+  const [userSnap, creatorSnap] = await Promise.all([getDoc(userRef), getDoc(creatorRef)]);
+  const batch = writeBatch(db);
+  let hasUpdates = false;
+  if (userSnap.exists()) {
+    batch.update(userRef, updates);
+    hasUpdates = true;
+  }
+  if (creatorSnap.exists()) {
+    batch.update(creatorRef, updates);
+    hasUpdates = true;
+  }
+  if (hasUpdates) {
+    await batch.commit();
+  }
+}
+
+export async function updateProfilePhoto(
+  uid: string,
+  avatarBase64: string | null,
+  photoUrl?: string | null
+): Promise<void> {
+  const firestore = requireDb();
+  const cleanBase64 = avatarBase64 && avatarBase64.trim().length > 0 && avatarBase64.length <= 250000
+    ? avatarBase64
+    : null;
+  const cleanPhotoUrl = photoUrl?.trim().slice(0, 2000) || null;
+  const updates: Record<string, unknown> = {
+    avatarBase64: cleanBase64,
+    updatedAt: serverTimestamp()
+  };
+  if (cleanPhotoUrl) {
+    updates.photoUrl = cleanPhotoUrl;
+  }
+  const userRef = doc(firestore, "users", uid);
+  const creatorRef = doc(firestore, "creators", uid);
+  const [userSnap, creatorSnap] = await Promise.all([getDoc(userRef), getDoc(creatorRef)]);
+  const batch = writeBatch(firestore);
+  let hasUpdates = false;
+  if (creatorSnap.exists()) {
+    batch.update(creatorRef, updates);
+    hasUpdates = true;
+  }
+  if (userSnap.exists()) {
+    batch.update(userRef, updates);
+    hasUpdates = true;
+  }
+  if (hasUpdates) {
+    await batch.commit();
   }
 }
 
@@ -486,20 +582,28 @@ export function observeCallSessions(
 export async function createCallSession(
   uid: string,
   hostName: string,
-  callType: "audio" | "video" | "group"
+  callType: "audio" | "video" | "group",
+  invitedParticipantIds: string[] = [],
+  invitedParticipantNames: string[] = []
 ): Promise<CallSession> {
   const firestore = requireDb();
   const suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
   const code = `PULSE-${suffix}`;
   const cleanName = hostName.trim().slice(0, 60) || "Creator";
+  const mergedIds = Array.from(
+    new Set([uid, ...invitedParticipantIds.map((id) => id.trim()).filter(Boolean)])
+  ).slice(0, 12);
+  const mergedNames = Array.from(
+    new Set([cleanName, ...invitedParticipantNames.map((n) => n.trim()).filter(Boolean)])
+  ).slice(0, 12);
   await setDoc(doc(firestore, "call_sessions", code), {
     hostId: uid,
     hostName: cleanName,
     roomCode: code,
     callType,
     status: "ringing",
-    participantIds: [uid],
-    participantNames: [cleanName],
+    participantIds: mergedIds,
+    participantNames: mergedNames,
     durationSec: 0,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp()
@@ -511,8 +615,8 @@ export async function createCallSession(
     roomCode: code,
     callType,
     status: "ringing",
-    participantIds: [uid],
-    participantNames: [cleanName],
+    participantIds: mergedIds,
+    participantNames: mergedNames,
     durationSec: 0
   };
 }
@@ -556,6 +660,60 @@ export async function endCallSession(callId: string, durationSec: number): Promi
     durationSec: Math.max(0, Math.min(86400, Math.round(durationSec))),
     updatedAt: serverTimestamp()
   });
+}
+
+export async function declineCallSession(callId: string): Promise<void> {
+  await endCallSession(callId, 0);
+}
+
+export function observeCallSignals(
+  callId: string,
+  recipientUid: string,
+  onData: (signals: CallSignal[]) => void
+): Unsubscribe {
+  const firestore = requireDb();
+  const q = query(
+    collection(firestore, "call_sessions", callId, "signals"),
+    where("recipientId", "==", recipientUid)
+  );
+  return onSnapshot(q, (snap) => {
+    const list = snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }) as CallSignal)
+      .sort((a, b) => toTimestampMillis(a.createdAt) - toTimestampMillis(b.createdAt));
+    onData(list);
+  });
+}
+
+export async function sendCallSignal(params: {
+  callId: string;
+  senderId: string;
+  recipientId: string;
+  type: "offer" | "answer" | "candidate";
+  sdp?: string | null;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  candidate?: string | null;
+}): Promise<void> {
+  const firestore = requireDb();
+  const normalizedCallId = params.callId.trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
+  if (normalizedCallId.length < 4 || normalizedCallId.length > 32) {
+    throw new Error("Invalid callId for signaling.");
+  }
+  const signalRef = doc(collection(firestore, "call_sessions", normalizedCallId, "signals"));
+  const payload: Record<string, unknown> = {
+    callId: normalizedCallId,
+    senderId: params.senderId,
+    recipientId: params.recipientId,
+    type: params.type,
+    createdAt: serverTimestamp()
+  };
+  if (params.sdp != null) payload.sdp = params.sdp.slice(0, 32768);
+  if (params.sdpMid != null) payload.sdpMid = params.sdpMid.slice(0, 64);
+  if (params.sdpMLineIndex != null) {
+    payload.sdpMLineIndex = Math.max(0, Math.min(32, Math.round(params.sdpMLineIndex)));
+  }
+  if (params.candidate != null) payload.candidate = params.candidate.slice(0, 2048);
+  await setDoc(signalRef, payload);
 }
 
 // --- Admin Panel & RBAC Moderation ---

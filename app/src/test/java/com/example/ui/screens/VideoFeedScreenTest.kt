@@ -8,9 +8,11 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import com.example.data.CreatorProfile
 import com.example.data.PublishedVideo
 import com.example.ui.UiState
@@ -24,7 +26,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [36], qualifiers = "w411dp-h915dp")
 class VideoFeedScreenTest {
 
     @get:Rule
@@ -100,12 +102,6 @@ class VideoFeedScreenTest {
         composeRule.onNodeWithTag("feed_like_count_vid_1", useUnmergedTree = true)
             .assertTextEquals("3")
 
-        composeRule.onNodeWithTag("feed_like_button_vid_2")
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Unlike Podcast Gear Tour")
-        composeRule.onNodeWithTag("feed_like_count_vid_2", useUnmergedTree = true)
-            .assertTextEquals("10")
-
         // Tap like on vid_1: increments count and updates state without opening video detail
         composeRule.onNodeWithTag("feed_like_button_vid_1").performClick()
         assertEquals(listOf("vid_1"), toggleCalls)
@@ -122,6 +118,15 @@ class VideoFeedScreenTest {
         videosState = UiState.Success(updatedList)
         composeRule.onNodeWithTag("feed_like_count_vid_1", useUnmergedTree = true)
             .assertTextEquals("5")
+
+        // Scroll to vid_2 before asserting & clicking unlike
+        composeRule.onNodeWithTag("feed_video_list")
+            .performScrollToNode(hasTestTag("video_card_vid_2"))
+        composeRule.onNodeWithTag("feed_like_button_vid_2")
+            .assertIsDisplayed()
+            .assertContentDescriptionEquals("Unlike Podcast Gear Tour")
+        composeRule.onNodeWithTag("feed_like_count_vid_2", useUnmergedTree = true)
+            .assertTextEquals("10")
 
         // Tap unlike on vid_2: decrements count
         composeRule.onNodeWithTag("feed_like_button_vid_2").performClick()
@@ -226,7 +231,9 @@ class VideoFeedScreenTest {
         composeRule.onNodeWithTag("feed_share_label_vid_1", useUnmergedTree = true)
             .assertTextEquals("Copied")
 
-        composeRule.onNodeWithTag("feed_share_button_vid_2").performClick()
+        composeRule.onNodeWithTag("feed_video_list")
+            .performScrollToNode(hasTestTag("video_card_vid_2"))
+        composeRule.onNodeWithTag("feed_share_button_vid_2").assertIsDisplayed().performClick()
 
         assertEquals(listOf("vid_1", "vid_2"), sharedVideoIds)
         assertNull(openedVideoId)

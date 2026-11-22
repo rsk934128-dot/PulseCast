@@ -23,6 +23,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import com.google.firebase.auth.userProfileChangeRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,9 +105,18 @@ fun attemptAutoSignIn(
             val result = credentialManager.getCredential(activityContext, request)
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
+                val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                val authCredential = GoogleAuthProvider.getCredential(googleCred.idToken, null)
+                val authResult = Firebase.auth.signInWithCredential(authCredential).await()
+                val signedInUser = authResult.user ?: Firebase.auth.currentUser
+                if (signedInUser != null && signedInUser.photoUrl == null && googleCred.profilePictureUri != null) {
+                    runCatching {
+                        signedInUser.updateProfile(
+                            userProfileChangeRequest { photoUri = googleCred.profilePictureUri }
+                        ).await()
+                        signedInUser.reload().await()
+                    }
+                }
                 withContext(Dispatchers.Main) { onAuthSuccess() }
             } else {
                 withContext(Dispatchers.Main) { onUnauthenticated() }
@@ -173,10 +183,20 @@ fun onGoogleSignInClicked(
 
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-                val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
+                val googleCred = GoogleIdTokenCredential.createFrom(credential.data)
+                val authCredential = GoogleAuthProvider.getCredential(googleCred.idToken, null)
                 val authResult = withContext(NonCancellable) {
-                    Firebase.auth.signInWithCredential(authCredential).await()
+                    val res = Firebase.auth.signInWithCredential(authCredential).await()
+                    val signedInUser = res.user ?: Firebase.auth.currentUser
+                    if (signedInUser != null && signedInUser.photoUrl == null && googleCred.profilePictureUri != null) {
+                        runCatching {
+                            signedInUser.updateProfile(
+                                userProfileChangeRequest { photoUri = googleCred.profilePictureUri }
+                            ).await()
+                            signedInUser.reload().await()
+                        }
+                    }
+                    res
                 }
                 if (authResult.user != null || Firebase.auth.currentUser != null) {
                     withContext(Dispatchers.Main) { onAuthSuccess() }

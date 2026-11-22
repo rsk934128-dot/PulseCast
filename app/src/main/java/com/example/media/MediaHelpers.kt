@@ -103,7 +103,15 @@ suspend fun extractVideoMetadata(
 fun decodeBase64ToBitmap(base64: String?): Bitmap? {
     if (base64.isNullOrBlank()) return null
     return try {
-        val bytes = Base64.decode(base64, Base64.DEFAULT)
+        val cleaned = base64.trim().let { raw ->
+            val commaIdx = raw.indexOf(',')
+            if (raw.startsWith("data:", ignoreCase = true) && commaIdx > 0) {
+                raw.substring(commaIdx + 1)
+            } else {
+                raw
+            }
+        }
+        val bytes = Base64.decode(cleaned, Base64.DEFAULT)
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
     } catch (_: Exception) {
         null

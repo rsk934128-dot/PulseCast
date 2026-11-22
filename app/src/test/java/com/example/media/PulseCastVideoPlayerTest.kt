@@ -5,6 +5,7 @@ import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
@@ -40,7 +41,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [36], qualifiers = "w411dp-h915dp")
 class PulseCastVideoPlayerTest {
 
     @get:Rule
@@ -119,6 +120,38 @@ class PulseCastVideoPlayerTest {
         composeRule.onNodeWithTag("video_speed_button").performClick()
         assertEquals(2.0f, fakePlayer.speedValue, 0.01f)
         composeRule.onNodeWithText("2.0x").assertIsDisplayed()
+    }
+
+    @Test
+    fun compactWidth_togglesCompactVolumePopupOnMute() {
+        val fakePlayer = FakeMedia3Player().apply {
+            stateValue = Player.STATE_READY
+            durationValue = 90_000L
+            currentPositionValue = 10_000L
+        }
+
+        composeRule.setContent {
+            PulseCastTheme {
+                PulseCastVideoPlayer(
+                    videoUri = "https://example.com/compact.mp4",
+                    autoPlay = false,
+                    externalPlayer = fakePlayer,
+                    renderSurface = false,
+                    modifier = Modifier.width(300.dp).height(240.dp)
+                )
+            }
+        }
+
+        // Compact width (< 340.dp) hides inline volume slider until mute toggle expands popup
+        composeRule.onNodeWithTag("video_volume_slider").assertDoesNotExist()
+        composeRule.onNodeWithTag("video_mute_button").performClick()
+        assertEquals(0f, fakePlayer.volumeValue, 0.01f)
+        composeRule.onNodeWithTag("video_volume_slider").assertIsDisplayed()
+
+        // Second tap unmutes and collapses the compact volume popup
+        composeRule.onNodeWithTag("video_mute_button").performClick()
+        assertTrue(fakePlayer.volumeValue > 0f)
+        composeRule.onNodeWithTag("video_volume_slider").assertDoesNotExist()
     }
 
     @Test

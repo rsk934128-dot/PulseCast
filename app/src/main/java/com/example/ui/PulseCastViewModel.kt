@@ -227,6 +227,35 @@ class PulseCastViewModel(
             else repository.observeCallSignals(callId, currentUserId).catch { emit(emptyList()) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val callParticipantProfiles: StateFlow<Map<String, CreatorProfile>> =
+        combine(activeCallSession, incomingCallSession, callsState) { active, incoming, state ->
+            val fromActiveAndIncoming = buildList {
+                if (active != null) {
+                    add(active.hostId)
+                    addAll(active.participantIds)
+                }
+                if (incoming != null) {
+                    add(incoming.hostId)
+                    addAll(incoming.participantIds)
+                }
+            }
+            val fromRecentCalls = (state as? UiState.Success)?.data
+                .orEmpty()
+                .take(10)
+                .flatMap { listOf(it.hostId) + it.participantIds }
+            (fromActiveAndIncoming + fromRecentCalls)
+                .map { it.trim() }
+                .filter { it.isNotBlank() && it != currentUserId }
+                .distinct()
+                .take(20)
+        }
+            .distinctUntilChanged()
+            .flatMapLatest { peerIds ->
+                if (peerIds.isEmpty()) flowOf(emptyMap())
+                else repository.observeCreatorPresence(peerIds).catch { emit(emptyMap()) }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
+
     val incomingCallSession: StateFlow<CallSession?> =
         combine(callsState, _activeCallId, _dismissedIncomingCallIds) { state, activeId, dismissed ->
             if (!activeId.isNullOrBlank()) return@combine null

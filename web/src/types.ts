@@ -8,6 +8,10 @@ export interface UserAccount {
   pushCallAlerts: boolean;
   pushMessageAlerts: boolean;
   hdVideoDefault: boolean;
+  isOnline?: boolean | null;
+  lastActiveAt?: Timestamp | null;
+  photoUrl?: string | null;
+  avatarBase64?: string | null;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }
@@ -20,6 +24,10 @@ export interface CreatorProfile {
   bio?: string | null;
   status?: "online" | "in_call" | "studio" | "away" | string | null;
   isDiscoverable: boolean;
+  isOnline?: boolean | null;
+  lastActiveAt?: Timestamp | null;
+  photoUrl?: string | null;
+  avatarBase64?: string | null;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }
@@ -95,6 +103,19 @@ export interface CallSession {
   updatedAt?: Timestamp | null;
 }
 
+export interface CallSignal {
+  id: string;
+  callId: string;
+  senderId: string;
+  recipientId: string;
+  type: "offer" | "answer" | "candidate" | string;
+  sdp?: string | null;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  candidate?: string | null;
+  createdAt?: Timestamp | null;
+}
+
 export interface AdminRecord {
   id: string;
   userId: string;
@@ -105,4 +126,3 @@ export interface AdminRecord {
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }
-

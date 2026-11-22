@@ -160,7 +160,9 @@ fun VideoFeedScreen(
             onRetryPlayback = { viewModel.resolvePlaybackForVideo(selectedVideo, context, forceReload = true) },
             onSyncLocalToCloud = { viewModel.syncLocalVideoToCloud(selectedVideo) },
             isSyncingToCloud = selectedVideo.id in syncingVideoIds,
-            onShareVideo = { viewModel.notifyVideoLinkCopied(selectedVideo) }
+            onShareVideo = { viewModel.notifyVideoLinkCopied(selectedVideo) },
+            creatorsById = creatorsById,
+            onCommentAuthorClick = { uid, name -> viewModel.openCreatorProfile(uid, name) }
         )
     } else {
         VideoFeedContent(
@@ -711,7 +713,9 @@ internal fun VideoDetailScreen(
     onRetryPlayback: (() -> Unit)? = null,
     onSyncLocalToCloud: (() -> Unit)? = null,
     isSyncingToCloud: Boolean = false,
-    onShareVideo: () -> Unit = {}
+    onShareVideo: () -> Unit = {},
+    creatorsById: Map<String, com.example.data.CreatorProfile> = emptyMap(),
+    onCommentAuthorClick: ((String, String?) -> Unit)? = null
 ) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
@@ -1091,6 +1095,14 @@ internal fun VideoDetailScreen(
             }
 
             items(comments, key = { it.id }) { comment ->
+                val commenter = creatorsById[comment.authorId]
+                val isCommenterOnline = commenter?.let {
+                    com.example.data.resolveIsUserOnline(
+                        isOnlineFlag = it.isOnline,
+                        lastActiveAt = it.lastActiveAt,
+                        updatedAt = it.updatedAt
+                    )
+                } == true
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1098,17 +1110,33 @@ internal fun VideoDetailScreen(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            text = comment.authorName,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        com.example.ui.components.UserAvatarWithStatus(
+                            displayName = comment.authorName,
+                            isOnline = isCommenterOnline,
+                            avatarSize = 32.dp,
+                            photoUrl = commenter?.photoUrl,
+                            avatarBase64 = commenter?.avatarBase64,
+                            onClick = onCommentAuthorClick?.let { click ->
+                                { click(comment.authorId, comment.authorName) }
+                            }
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = comment.text,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = comment.authorName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = comment.text,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
             }

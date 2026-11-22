@@ -103,16 +103,24 @@ fun CallsScreen(
     val activeCallSignals by viewModel.activeCallSignals.collectAsStateWithLifecycle()
     val callsState by viewModel.callsState.collectAsStateWithLifecycle()
     val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
+    val callParticipantProfiles by viewModel.callParticipantProfiles.collectAsStateWithLifecycle()
     val creatorsList = remember(creatorsState) {
         (creatorsState as? UiState.Success)?.data.orEmpty()
     }
-    val creatorsById = remember(creatorsList) {
-        creatorsList.associateBy { it.userId }
+    val creatorsById = remember(creatorsList, callParticipantProfiles) {
+        buildMap {
+            creatorsList.forEach { if (it.userId.isNotBlank()) put(it.userId, it) }
+            putAll(callParticipantProfiles)
+        }
     }
     val otherCreators = remember(creatorsList, viewModel.currentUserId) {
         creatorsList.filter { it.userId != viewModel.currentUserId }
     }
     var roomCodeInput by remember { mutableStateOf("") }
+    var selectedTargetId by remember { mutableStateOf<String?>(null) }
+    val selectedTargetCreator = remember(otherCreators, selectedTargetId) {
+        otherCreators.firstOrNull { it.userId == selectedTargetId }
+    }
 
     if (renderActiveCallStage && activeCall != null) {
         val currentSession = activeCall!!
@@ -139,7 +147,8 @@ fun CallsScreen(
             onEndCall = { duration -> viewModel.endActiveCall(duration) },
             modifier = modifier,
             peerPhotoUrl = peerCreator?.photoUrl,
-            peerAvatarBase64 = peerCreator?.avatarBase64
+            peerAvatarBase64 = peerCreator?.avatarBase64,
+            peerFallbackName = peerCreator?.displayName
         )
     } else {
         LazyColumn(
@@ -191,12 +200,62 @@ fun CallsScreen(
                             )
                         }
 
+                        if (otherCreators.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = if (selectedTargetCreator != null) {
+                                        "Ringing: ${selectedTargetCreator.displayName}"
+                                    } else {
+                                        "Select a person to ring (optional):"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (selectedTargetCreator != null) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    item(key = "open_room") {
+                                        androidx.compose.material3.FilterChip(
+                                            selected = selectedTargetCreator == null,
+                                            onClick = { selectedTargetId = null },
+                                            label = { Text("Open Room") }
+                                        )
+                                    }
+                                    items(otherCreators, key = { it.userId }) { creator ->
+                                        val isSelected = selectedTargetId == creator.userId
+                                        androidx.compose.material3.FilterChip(
+                                            selected = isSelected,
+                                            onClick = {
+                                                selectedTargetId = if (isSelected) null else creator.userId
+                                            },
+                                            leadingIcon = {
+                                                UserAvatarWithStatus(
+                                                    displayName = creator.displayName,
+                                                    isOnline = com.example.data.resolveIsUserOnline(
+                                                        isOnlineFlag = creator.isOnline,
+                                                        lastActiveAt = creator.lastActiveAt,
+                                                        updatedAt = creator.updatedAt
+                                                    ),
+                                                    avatarSize = 22.dp,
+                                                    photoUrl = creator.photoUrl,
+                                                    avatarBase64 = creator.avatarBase64
+                                                )
+                                            },
+                                            label = { Text(creator.displayName, maxLines = 1) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Button(
-                                onClick = { viewModel.startCall("video") },
+                                onClick = { viewModel.startCall("video", targetCreator = selectedTargetCreator) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(52.dp)
@@ -205,10 +264,10 @@ fun CallsScreen(
                             ) {
                                 Icon(Icons.Filled.VideoCall, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Video")
+                                Text(if (selectedTargetCreator != null) "Call Video" else "Video")
                             }
                             FilledTonalButton(
-                                onClick = { viewModel.startCall("audio") },
+                                onClick = { viewModel.startCall("audio", targetCreator = selectedTargetCreator) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(52.dp)
@@ -217,12 +276,12 @@ fun CallsScreen(
                             ) {
                                 Icon(Icons.Filled.Call, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Audio")
+                                Text(if (selectedTargetCreator != null) "Call Audio" else "Audio")
                             }
                         }
 
                         FilledTonalButton(
-                            onClick = { viewModel.startCall("group") },
+                            onClick = { viewModel.startCall("group", targetCreator = selectedTargetCreator) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
@@ -388,8 +447,15 @@ fun CallsScreen(
                         }
                     } else {
                         items(state.data, key = { it.id }) { session ->
+                            val peerId = session.participantIds.firstOrNull { it != viewModel.currentUserId }
+                                ?: session.hostId
+                            val peerCreator = creatorsById[peerId] ?: creatorsById[session.hostId]
                             CallHistoryRow(
                                 session = session,
+                                currentUserId = viewModel.currentUserId,
+                                peerCreator = peerCreator,
+                                onAnswer = { viewModel.acceptIncomingCall(session) },
+                                onDecline = { viewModel.declineIncomingCall(session) },
                                 onRejoin = {
                                     if (session.status != "ended") {
                                         viewModel.joinCallByCode(session.roomCode)
@@ -407,10 +473,37 @@ fun CallsScreen(
 @Composable
 private fun CallHistoryRow(
     session: CallSession,
+    currentUserId: String,
+    peerCreator: com.example.data.CreatorProfile? = null,
+    onAnswer: () -> Unit = {},
+    onDecline: () -> Unit = {},
     onRejoin: () -> Unit
 ) {
+    val isIncomingRinging = session.status == "ringing" &&
+        session.hostId.isNotBlank() &&
+        session.hostId != currentUserId
+    val displayPeerName = peerCreator?.displayName?.takeIf { it.isNotBlank() }
+        ?: if (session.hostId != currentUserId) {
+            session.hostName.ifBlank { "PulseCast Caller" }
+        } else {
+            session.participantNames
+                ?.firstOrNull { it.isNotBlank() && !it.equals(session.hostName, ignoreCase = true) }
+                ?: session.hostName.ifBlank { "PulseCast Peer" }
+        }
+    val isPeerOnline = peerCreator?.let {
+        com.example.data.resolveIsUserOnline(
+            isOnlineFlag = it.isOnline,
+            lastActiveAt = it.lastActiveAt,
+            updatedAt = it.updatedAt
+        )
+    } ?: (session.status != "ended")
+
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        color = if (isIncomingRinging) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        },
         shape = RoundedCornerShape(16.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -418,41 +511,50 @@ private fun CallHistoryRow(
             modifier = Modifier.padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = when (session.callType) {
-                        "audio" -> Icons.Filled.Call
-                        "group" -> Icons.Filled.Groups
-                        else -> Icons.Filled.VideoCall
-                    },
-                    contentDescription = session.callType,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
+            UserAvatarWithStatus(
+                displayName = displayPeerName,
+                isOnline = isPeerOnline,
+                avatarSize = 44.dp,
+                isGroup = session.callType == "group",
+                photoUrl = peerCreator?.photoUrl,
+                avatarBase64 = peerCreator?.avatarBase64
+            )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "${session.callType.replaceFirstChar { it.uppercase() }} · ${session.roomCode}",
+                    text = "$displayPeerName · ${session.callType.replaceFirstChar { it.uppercase() }}",
                     style = MaterialTheme.typography.titleSmall
                 )
-                val peerSummary = session.participantNames?.filter { it.isNotBlank() }?.joinToString(", ")
                 Text(
-                    text = if (!peerSummary.isNullOrBlank()) {
-                        "${session.status.uppercase()} · $peerSummary"
-                    } else {
-                        "Host: ${session.hostName} · ${session.participantIds.size} participant(s)"
-                    },
+                    text = "${session.roomCode} · ${session.status.uppercase()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = if (session.status != "ended") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (session.status != "ended") {
+            if (isIncomingRinging) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilledTonalButton(
+                        onClick = onDecline,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("Decline")
+                    }
+                    Button(
+                        onClick = onAnswer,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EmeraldMint,
+                            contentColor = Color(0xFF002114)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text("Answer")
+                    }
+                }
+            } else if (session.status != "ended") {
                 FilledTonalButton(onClick = onRejoin) {
                     Text("Join")
                 }
@@ -483,7 +585,8 @@ internal fun ActiveCallStage(
     onEndCall: (Long) -> Unit,
     modifier: Modifier = Modifier,
     peerPhotoUrl: String? = null,
-    peerAvatarBase64: String? = null
+    peerAvatarBase64: String? = null,
+    peerFallbackName: String? = null
 ) {
     var isCameraEnabled by remember(session.roomCode) { mutableStateOf(session.callType != "audio") }
     val requiredPermissions = remember(isCameraEnabled) {
@@ -515,7 +618,8 @@ internal fun ActiveCallStage(
                 onEndCall = onEndCall,
                 modifier = modifier,
                 peerPhotoUrl = peerPhotoUrl,
-                peerAvatarBase64 = peerAvatarBase64
+                peerAvatarBase64 = peerAvatarBase64,
+                peerFallbackName = peerFallbackName
             )
         }
     ) { permScope ->
@@ -530,7 +634,8 @@ internal fun ActiveCallStage(
             onEndCall = onEndCall,
             modifier = modifier,
             peerPhotoUrl = peerPhotoUrl,
-            peerAvatarBase64 = peerAvatarBase64
+            peerAvatarBase64 = peerAvatarBase64,
+            peerFallbackName = peerFallbackName
         )
     }
 }
@@ -554,7 +659,8 @@ private fun ActiveCallStageContent(
     onEndCall: (Long) -> Unit,
     modifier: Modifier = Modifier,
     peerPhotoUrl: String? = null,
-    peerAvatarBase64: String? = null
+    peerAvatarBase64: String? = null,
+    peerFallbackName: String? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -593,14 +699,16 @@ private fun ActiveCallStageContent(
         }
     }
 
-    LaunchedEffect(rtcClient, signals) {
-        rtcClient.handleIncomingSignals(signals)
-    }
-
     val rtcState by rtcClient.connectionState.collectAsStateWithLifecycle()
     val localVideoTrack by rtcClient.localVideoTrack.collectAsStateWithLifecycle()
     val remoteVideoTrack by rtcClient.remoteVideoTrack.collectAsStateWithLifecycle()
     val isMediaReady by rtcClient.isMediaReady.collectAsStateWithLifecycle()
+
+    LaunchedEffect(rtcClient, signals, isMediaReady) {
+        if (isMediaReady) {
+            rtcClient.handleIncomingSignals(signals)
+        }
+    }
 
     LaunchedEffect(session.roomCode, session.status) {
         if (session.status == "active") {
@@ -615,10 +723,15 @@ private fun ActiveCallStageContent(
         onEndCall(elapsedSec)
     }
 
-    val peerDisplayName = remember(session, currentUserId) {
-        session.participantNames
-            ?.firstOrNull { name -> name.isNotBlank() && (session.hostId == currentUserId || name == session.hostName) }
-            ?: session.hostName.ifBlank { "PulseCast Peer" }
+    val peerDisplayName = remember(session, currentUserId, peerFallbackName) {
+        peerFallbackName?.takeIf { it.isNotBlank() }
+            ?: if (session.hostId != currentUserId && session.hostName.isNotBlank()) {
+                session.hostName
+            } else {
+                session.participantNames
+                    ?.firstOrNull { name -> name.isNotBlank() && !name.equals(session.hostName, ignoreCase = true) }
+                    ?: session.hostName.ifBlank { "PulseCast Peer" }
+            }
     }
 
     val statusText = when {

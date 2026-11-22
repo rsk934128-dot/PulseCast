@@ -200,14 +200,20 @@ private fun PulseCastMainShell(
     val activeCallSignals by viewModel.activeCallSignals.collectAsStateWithLifecycle()
     val userAccount by viewModel.userAccountState.collectAsStateWithLifecycle()
     val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
+    val callParticipantProfiles by viewModel.callParticipantProfiles.collectAsStateWithLifecycle()
     val publicVideosState by viewModel.publicVideosState.collectAsStateWithLifecycle()
     val inspectingCreator by viewModel.inspectingCreator.collectAsStateWithLifecycle()
     val likedVideoIds by viewModel.likedVideoIds.collectAsStateWithLifecycle()
     val likingVideoIds by viewModel.likingVideoIds.collectAsStateWithLifecycle()
     val pendingNotificationAction by CallActionBus.pendingAction.collectAsStateWithLifecycle()
 
-    val creatorsById = remember(creatorsState) {
-        (creatorsState as? UiState.Success)?.data?.associateBy { it.userId }.orEmpty()
+    val creatorsById = remember(creatorsState, callParticipantProfiles) {
+        buildMap {
+            (creatorsState as? UiState.Success)?.data?.forEach { profile ->
+                if (profile.userId.isNotBlank()) put(profile.userId, profile)
+            }
+            putAll(callParticipantProfiles)
+        }
     }
 
     val visibleTabs = remember(isAdmin) {
@@ -434,7 +440,8 @@ private fun PulseCastMainShell(
                     onEndCall = { duration -> viewModel.endActiveCall(duration) },
                     modifier = Modifier.fillMaxSize(),
                     peerPhotoUrl = peerCreator?.photoUrl,
-                    peerAvatarBase64 = peerCreator?.avatarBase64
+                    peerAvatarBase64 = peerCreator?.avatarBase64,
+                    peerFallbackName = peerCreator?.displayName
                 )
             } else if (incomingCall != null) {
                 val ringingCall = incomingCall!!
