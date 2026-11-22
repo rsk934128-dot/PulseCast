@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasTestTag
@@ -276,5 +279,80 @@ class StudioProfileScreenTest {
         scrollListToTag("studio_creators_strip")
         composeRule.onNodeWithTag("studio_creator_card_uid_khoku").assertIsDisplayed().performClick()
         assertEquals("uid_khoku", viewedCreatorId)
+    }
+
+    @Test
+    fun profile_videoCardLikeButton_updatesLikeStateAndCountWithoutOpeningVideo() {
+        var myVideosState by androidx.compose.runtime.mutableStateOf<UiState<List<PublishedVideo>>>(
+            UiState.Success(
+                listOf(
+                    PublishedVideo(
+                        id = "vid_prof_1",
+                        authorId = "uid_alice",
+                        authorName = "Alice Studio",
+                        title = "Studio Acoustic Check",
+                        category = "Studio",
+                        visibility = "public",
+                        likesCount = 4L,
+                        commentsCount = 1L,
+                        durationSec = 75L
+                    )
+                )
+            )
+        )
+        var likedIds by androidx.compose.runtime.mutableStateOf(emptySet<String>())
+        var openedVideoId: String? = null
+        val toggleCalls = mutableListOf<String>()
+
+        composeRule.setContent {
+            PulseCastTheme {
+                StudioProfileContent(
+                    initialDisplayName = "Alice Studio",
+                    initialHandle = "alice_cast",
+                    email = "alice@pulsecast.app",
+                    initialBio = "Podcast & audio engineer",
+                    initialStatus = "studio",
+                    photoUrl = null,
+                    pushCalls = true,
+                    pushMessages = true,
+                    hdVideo = true,
+                    myVideosState = myVideosState,
+                    onSaveProfile = { _, _, _, _ -> },
+                    onUpdatePreferences = { _, _, _ -> },
+                    onUploadVideoClick = {},
+                    onVideoClick = { openedVideoId = it.id },
+                    onDeleteVideo = {},
+                    onSignOut = {},
+                    likedVideoIds = likedIds,
+                    onToggleLike = { video ->
+                        toggleCalls += video.id
+                        val currentlyLiked = video.id in likedIds
+                        likedIds = if (currentlyLiked) likedIds - video.id else likedIds + video.id
+                        val currentList = (myVideosState as UiState.Success).data
+                        myVideosState = UiState.Success(
+                            currentList.map { item ->
+                                if (item.id == video.id) {
+                                    item.copy(likesCount = if (currentlyLiked) item.likesCount - 1L else item.likesCount + 1L)
+                                } else {
+                                    item
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+        }
+
+        scrollListToTag("profile_video_card_vid_prof_1")
+        composeRule.onNodeWithTag("profile_like_button_vid_prof_1").assertIsDisplayed()
+        composeRule.onNodeWithTag("profile_like_count_vid_prof_1", useUnmergedTree = true)
+            .assertTextContains("4")
+
+        composeRule.onNodeWithTag("profile_like_button_vid_prof_1").performClick()
+
+        assertEquals(listOf("vid_prof_1"), toggleCalls)
+        assertEquals(null, openedVideoId)
+        composeRule.onNodeWithTag("profile_like_count_vid_prof_1", useUnmergedTree = true)
+            .assertTextContains("5")
     }
 }

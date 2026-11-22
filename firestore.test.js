@@ -228,6 +228,58 @@ test("Videos feed: atomic like/unlike and comments enforce rules, private videos
   });
   await assertSucceeds(batch.commit());
 
+  // Alice uploads chunked media to public video and updates videoUri; Bob can read public chunks but cannot spoof/delete
+  await assertSucceeds(
+    aliceDb.collection("videos").doc("vid_1").collection("media_chunks").doc("chunk_0").set({
+      videoId: "vid_1",
+      authorId: ALICE_UID,
+      index: 0,
+      totalChunks: 1,
+      mimeType: "video/mp4",
+      dataBase64: "AAAAIGZ0eXBpc29t",
+      createdAt: now,
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("videos").doc("vid_1").update({
+      videoUri: "firestore://videos/vid_1?ext=mp4",
+      updatedAt: new Date(Date.now() - 500),
+    })
+  );
+  await assertSucceeds(
+    bobDb.collection("videos").doc("vid_1").collection("media_chunks").where("videoId", "==", "vid_1").get()
+  );
+  await assertFails(
+    bobDb.collection("videos").doc("vid_1").collection("media_chunks").doc("chunk_1").set({
+      videoId: "vid_1",
+      authorId: BOB_UID,
+      index: 1,
+      totalChunks: 2,
+      mimeType: "video/mp4",
+      dataBase64: "AAAA",
+      createdAt: now,
+    })
+  );
+  await assertFails(
+    bobDb.collection("videos").doc("vid_1").collection("media_chunks").doc("chunk_0").delete()
+  );
+
+  // Private video chunks are isolated from Bob
+  await assertSucceeds(
+    aliceDb.collection("videos").doc("vid_private").collection("media_chunks").doc("chunk_0").set({
+      videoId: "vid_private",
+      authorId: ALICE_UID,
+      index: 0,
+      totalChunks: 1,
+      mimeType: "video/mp4",
+      dataBase64: "AAAA",
+      createdAt: now,
+    })
+  );
+  await assertFails(
+    bobDb.collection("videos").doc("vid_private").collection("media_chunks").where("videoId", "==", "vid_private").get()
+  );
+
   // Bob cannot delete Alice's video
   await assertFails(bobDb.collection("videos").doc("vid_1").delete());
 });

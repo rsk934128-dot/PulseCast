@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
-import { Film, LogOut, MessageSquare, PhoneCall, Radio, ShieldCheck, UserCircle } from "lucide-react";
+import { Download, Film, LogOut, MessageSquare, PhoneCall, Radio, ShieldCheck, UserCircle } from "lucide-react";
 import { auth, hasWebFirebaseConfig } from "./firebase";
 import {
   ensureUserAndCreatorInitialized,
@@ -34,12 +34,27 @@ import type {
 
 type TabId = "feed" | "chats" | "calls" | "profile" | "admin";
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
+function getInitialTabFromUrl(): TabId {
+  if (typeof window === "undefined") return "feed";
+  const tabParam = new URLSearchParams(window.location.search).get("tab")?.toLowerCase();
+  if (tabParam === "chats" || tabParam === "calls" || tabParam === "profile" || tabParam === "admin") {
+    return tabParam;
+  }
+  return "feed";
+}
+
 const BOOTSTRAPPED_ADMIN_EMAIL = "rsk755734@gmail.com";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(!hasWebFirebaseConfig);
-  const [activeTab, setActiveTab] = useState<TabId>("feed");
+  const [activeTab, setActiveTab] = useState<TabId>(() => getInitialTabFromUrl());
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
   const [account, setAccount] = useState<UserAccount | null>(null);
   const [creators, setCreators] = useState<CreatorProfile[]>([]);
   const [publicVideos, setPublicVideos] = useState<PublishedVideo[]>([]);
@@ -65,6 +80,23 @@ export function App() {
     const t = window.setTimeout(() => setToast(null), 3800);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event as BeforeInstallPromptEvent);
+    };
+    const onAppInstalled = () => {
+      setInstallPromptEvent(null);
+      notify("PulseCast installed as an app.");
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    window.addEventListener("appinstalled", onAppInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", onAppInstalled);
+    };
+  }, []);
 
   useEffect(() => {
     if (!auth) {
@@ -163,6 +195,13 @@ export function App() {
     await signOut(auth);
   };
 
+  const handleInstallPwa = async () => {
+    if (!installPromptEvent) return;
+    await installPromptEvent.prompt();
+    await installPromptEvent.userChoice.catch(() => null);
+    setInstallPromptEvent(null);
+  };
+
   const navItems: { id: TabId; label: string; icon: typeof Film }[] = [
     { id: "feed", label: "Feed", icon: Film },
     { id: "chats", label: "Chats", icon: MessageSquare },
@@ -226,6 +265,17 @@ export function App() {
               </div>
             </div>
           </div>
+          {installPromptEvent && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              style={{ marginBottom: 8, width: "100%" }}
+              onClick={handleInstallPwa}
+            >
+              <Download size={15} />
+              Install App
+            </button>
+          )}
           <button type="button" className="btn btn-secondary btn-sm" onClick={handleSignOut}>
             <LogOut size={15} />
             Sign Out
@@ -243,9 +293,17 @@ export function App() {
               PulseCast
             </span>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={handleSignOut}>
-            <LogOut size={16} />
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {installPromptEvent && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={handleInstallPwa}>
+                <Download size={15} />
+                Install
+              </button>
+            )}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleSignOut}>
+              <LogOut size={16} />
+            </button>
+          </div>
         </header>
 
         <main className="main-area">

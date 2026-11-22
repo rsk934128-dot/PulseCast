@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -17,6 +18,8 @@ import com.example.data.UserAccount
 import com.example.data.VideoComment
 import com.example.data.VideoUploadStage
 import com.example.data.isFreshRingingForUser
+import com.example.media.FirebaseStorageVideoUploader
+import com.example.media.FirestoreVideoMediaStore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -51,6 +54,14 @@ sealed interface VideoUploadUiState {
     data class Error(val message: String) : VideoUploadUiState
 }
 
+sealed interface VideoPlaybackSourceState {
+    data object Idle : VideoPlaybackSourceState
+    data object Loading : VideoPlaybackSourceState
+    data class Playable(val uri: String, val isLocalOnlyFallback: Boolean = false) : VideoPlaybackSourceState
+    data class Unavailable(val reason: String) : VideoPlaybackSourceState
+    data class Error(val message: String) : VideoPlaybackSourceState
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class PulseCastViewModel(
     private val repository: PulseCastRepository,
@@ -77,8 +88,17 @@ class PulseCastViewModel(
 
     private val _dismissedIncomingCallIds = MutableStateFlow<Set<String>>(emptySet())
 
+    private val _likingVideoIds = MutableStateFlow<Set<String>>(emptySet())
+    val likingVideoIds: StateFlow<Set<String>> = _likingVideoIds.asStateFlow()
+
     private val _videoUploadState = MutableStateFlow<VideoUploadUiState>(VideoUploadUiState.Idle)
     val videoUploadState: StateFlow<VideoUploadUiState> = _videoUploadState.asStateFlow()
+
+    private val _playbackSources = MutableStateFlow<Map<String, VideoPlaybackSourceState>>(emptyMap())
+    val playbackSources: StateFlow<Map<String, VideoPlaybackSourceState>> = _playbackSources.asStateFlow()
+
+    private val _syncingVideoIds = MutableStateFlow<Set<String>>(emptySet())
+    val syncingVideoIds: StateFlow<Set<String>> = _syncingVideoIds.asStateFlow()
 
     val publicVideosState: StateFlow<UiState<List<PublishedVideo>>> =
         repository.observePublicVideos()
@@ -154,6 +174,19 @@ class PulseCastViewModel(
             if (videoId.isNullOrBlank()) flowOf(emptyList())
             else repository.observeComments(videoId).catch { emit(emptyList()) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
+
+    val likedVideoIds: StateFlow<Set<String>> =
+        combine(publicVideosState, myVideosState) { publicState, myState ->
+            val publicIds = (publicState as? UiState.Success)?.data?.map { it.id }.orEmpty()
+            val myIds = (myState as? UiState.Success)?.data?.map { it.id }.orEmpty()
+            (publicIds + myIds).distinct()
+        }
+            .distinctUntilChanged()
+            .flatMapLatest { videoIds ->
+                if (videoIds.isEmpty()) flowOf(emptySet())
+                else repository.observeLikedVideoIds(videoIds, currentUserId).catch { emit(emptySet()) }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptySet())
 
     val isSelectedVideoLiked: StateFlow<Boolean> =
         _selectedVideoId.flatMapLatest { videoId ->
@@ -341,6 +374,90 @@ class PulseCastViewModel(
         _videoUploadState.value = VideoUploadUiState.Idle
     }
 
+    fun playbackKey(video: PublishedVideo): String = "${video.id}::${video.videoUri.orEmpty()}"
+
+    fun resolvePlaybackForVideo(
+        video: PublishedVideo,
+        context: Context,
+        forceReload: Boolean = false
+    ) {
+        val key = playbackKey(video)
+        val current = _playbackSources.value[key]
+        if (!forceReload && (current is VideoPlaybackSourceState.Loading || current is VideoPlaybackSourceState.Playable)) {
+            return
+        }
+
+        val rawUri = video.videoUri?.trim().orEmpty()
+        when {
+            rawUri.startsWith("http://", ignoreCase = true) ||
+                rawUri.startsWith("https://", ignoreCase = true) -> {
+                _playbackSources.value = _playbackSources.value + (key to VideoPlaybackSourceState.Playable(rawUri))
+            }
+
+            FirestoreVideoMediaStore.isFirestoreMediaUri(rawUri) -> {
+                val ref = FirestoreVideoMediaStore.parseFirestoreMediaUri(rawUri)
+                val cached = FirestoreVideoMediaStore.resolveCachedVideoUri(context, video.id, ref?.extension)
+                    ?: FirebaseStorageVideoUploader.resolveLocalVideoUri(context, video.id)
+                if (cached != null) {
+                    _playbackSources.value = _playbackSources.value + (key to VideoPlaybackSourceState.Playable(cached))
+                    return
+                }
+                _playbackSources.value = _playbackSources.value + (key to VideoPlaybackSourceState.Loading)
+                viewModelScope.launch {
+                    val result = repository.resolveCloudVideoToCache(video)
+                    val nextState = result.fold(
+                        onSuccess = { uri -> VideoPlaybackSourceState.Playable(uri) },
+                        onFailure = { err ->
+                            VideoPlaybackSourceState.Error(
+                                err.localizedMessage?.takeIf { it.isNotBlank() }
+                                    ?: "Unable to load video stream."
+                            )
+                        }
+                    )
+                    _playbackSources.value = _playbackSources.value + (key to nextState)
+                }
+            }
+
+            rawUri.isBlank() -> {
+                val localUri = FirebaseStorageVideoUploader.resolveLocalVideoUri(context, video.id)
+                val nextState = if (localUri != null) {
+                    VideoPlaybackSourceState.Playable(localUri, isLocalOnlyFallback = true)
+                } else {
+                    VideoPlaybackSourceState.Unavailable(
+                        "Video was uploaded to the creator's device only and has not synced to the cloud."
+                    )
+                }
+                _playbackSources.value = _playbackSources.value + (key to nextState)
+            }
+
+            else -> {
+                _playbackSources.value = _playbackSources.value + (key to VideoPlaybackSourceState.Playable(rawUri))
+            }
+        }
+    }
+
+    fun syncLocalVideoToCloud(video: PublishedVideo) {
+        if (video.id.isBlank() || video.id in _syncingVideoIds.value) return
+        _syncingVideoIds.value = _syncingVideoIds.value + video.id
+        viewModelScope.launch {
+            try {
+                repository.syncLocalVideoToCloud(video, currentUserId)
+                    .onSuccess {
+                        _playbackSources.value = _playbackSources.value.filterKeys { !it.startsWith("${video.id}::") }
+                        _snackbarEvents.tryEmit("Video synced to cloud for all users")
+                    }
+                    .onFailure { err ->
+                        _snackbarEvents.tryEmit(
+                            err.localizedMessage?.takeIf { it.isNotBlank() }
+                                ?: "Failed to sync video to cloud"
+                        )
+                    }
+            } finally {
+                _syncingVideoIds.value = _syncingVideoIds.value - video.id
+            }
+        }
+    }
+
     fun uploadAndPublishVideo(
         title: String,
         description: String?,
@@ -401,7 +518,7 @@ class PulseCastViewModel(
                 _snackbarEvents.tryEmit(
                     when {
                         usedLocalFallback -> "Published to Feed (saved locally; enable Firebase Storage for cloud streaming)"
-                        localVideoUri != null -> "Video uploaded to Storage & published"
+                        localVideoUri != null -> "Video uploaded & published for all users"
                         else -> "Video metadata published to PulseCast"
                     }
                 )
@@ -451,10 +568,26 @@ class PulseCastViewModel(
     }
 
     fun toggleVideoLike(videoId: String) {
+        if (videoId.isBlank() || videoId in _likingVideoIds.value) return
+        _likingVideoIds.value = _likingVideoIds.value + videoId
         viewModelScope.launch {
-            repository.toggleVideoLike(videoId, currentUserId)
-                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Could not update like") }
+            try {
+                repository.toggleVideoLike(videoId, currentUserId)
+                    .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Could not update like") }
+            } finally {
+                _likingVideoIds.value = _likingVideoIds.value - videoId
+            }
         }
+    }
+
+    fun notifyVideoLinkCopied(video: PublishedVideo) {
+        val cleanTitle = video.title.trim()
+        val message = if (cleanTitle.isNotEmpty()) {
+            "Video link copied for \"$cleanTitle\""
+        } else {
+            "Video link copied to clipboard"
+        }
+        _snackbarEvents.tryEmit(message)
     }
 
     fun addComment(videoId: String, text: String) {

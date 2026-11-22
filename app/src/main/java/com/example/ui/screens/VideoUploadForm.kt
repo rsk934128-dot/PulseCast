@@ -76,6 +76,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.example.R
+import com.example.media.MAX_FIRESTORE_VIDEO_BYTES
 import com.example.media.PulseCastVideoPlayer
 import com.example.media.decodeBase64ToBitmap
 import com.example.media.encodeUriImageToBase64
@@ -396,9 +397,9 @@ fun VideoUploadFormContent(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
-                                Text("Video File (Firebase Storage)", style = MaterialTheme.typography.titleSmall)
+                                Text("Video File (Cloud Sync)", style = MaterialTheme.typography.titleSmall)
                                 Text(
-                                    text = "Pick a clip from your gallery or record a new video to store in the cloud.",
+                                    text = "Pick a clip from your gallery or record a new video so other users can watch and listen.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -496,6 +497,15 @@ fun VideoUploadFormContent(
                                         )
                                     }
                                 }
+                            }
+
+                            if (selectedFileSizeBytes != null && selectedFileSizeBytes > MAX_FIRESTORE_VIDEO_BYTES) {
+                                Text(
+                                    text = stringResource(R.string.upload_large_file_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.testTag("upload_large_file_hint")
+                                )
                             }
 
                             if (showInlinePlayerPreview) {

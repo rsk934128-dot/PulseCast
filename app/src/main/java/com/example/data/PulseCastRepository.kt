@@ -4,21 +4,30 @@ import android.content.Context
 import android.net.Uri
 import com.example.R
 import com.example.media.FirebaseStorageVideoUploader
+import com.example.media.FirestoreVideoMediaStore
+import com.example.media.MAX_FIRESTORE_VIDEO_BYTES
 import com.example.media.VideoFileUploader
+import com.example.media.VideoTooLargeForFirestoreException
 import com.example.media.VideoUploadOutcome
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 sealed interface VideoUploadStage {
@@ -28,13 +37,16 @@ sealed interface VideoUploadStage {
 
 class PulseCastRepository(
     private val db: FirebaseFirestore,
-    private val videoUploader: VideoFileUploader = FirebaseStorageVideoUploader()
+    private val videoUploader: VideoFileUploader = FirebaseStorageVideoUploader(),
+    private val appContext: Context? = (videoUploader as? FirebaseStorageVideoUploader)?.appContext
 ) {
 
     constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
+        db = FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
-        )
+        ),
+        videoUploader = FirebaseStorageVideoUploader(appContext = context.applicationContext),
+        appContext = context.applicationContext
     )
 
     suspend fun ensureUserAndCreatorInitialized(
@@ -329,6 +341,10 @@ class PulseCastRepository(
         val docRef = db.collection("videos").document()
         var uploadedStorageUrl: String? = null
         val fallbackExternalUrl = externalVideoUrl?.trim()?.takeIf { it.isNotEmpty() }?.take(2000)
+        val safeMime = mimeType?.takeIf { it.startsWith("video/") } ?: "video/mp4"
+        val extension = FirebaseStorageVideoUploader.extensionForMime(safeMime)
+        var pendingChunkSourceFile: File? = null
+
         val resolvedVideoUri = if (localVideoUri != null) {
             onStageChange(VideoUploadStage.UploadingMedia(0f))
             when (
@@ -346,12 +362,91 @@ class PulseCastRepository(
                     outcome.downloadUrl
                 }
                 is VideoUploadOutcome.LocalDeviceOnly -> {
-                    onCloudFallbackUsed()
-                    fallbackExternalUrl
+                    val ctx = appContext
+                    when {
+                        fallbackExternalUrl != null -> fallbackExternalUrl
+                        ctx != null -> {
+                            pendingChunkSourceFile = prepareCloudSyncFile(
+                                context = ctx,
+                                videoId = docRef.id,
+                                extension = extension,
+                                localFilePath = outcome.localFilePath,
+                                localVideoUri = localVideoUri
+                            )
+                            FirestoreVideoMediaStore.buildFirestoreMediaUri(docRef.id, extension)
+                        }
+                        else -> {
+                            onCloudFallbackUsed()
+                            null
+                        }
+                    }
                 }
             }
         } else {
             fallbackExternalUrl
+        }
+
+        val chunkFile = pendingChunkSourceFile
+        if (chunkFile != null && resolvedVideoUri != null) {
+            val stagingPayload = buildVideoPayload(
+                uid = uid,
+                authorName = authorName,
+                title = title,
+                description = description,
+                category = category,
+                videoUri = null,
+                coverKey = coverKey,
+                thumbnailBase64 = thumbnailBase64,
+                visibility = "private",
+                durationSec = durationSec
+            )
+            var createdParentDoc = false
+            try {
+                docRef.set(stagingPayload).await()
+                createdParentDoc = true
+
+                uploadChunksToFirestore(
+                    docRef = docRef,
+                    videoId = docRef.id,
+                    uid = uid,
+                    mimeType = safeMime,
+                    sourceFile = chunkFile
+                ) { chunkFraction ->
+                    onStageChange(VideoUploadStage.UploadingMedia(0.05f + 0.91f * chunkFraction))
+                }
+
+                onStageChange(VideoUploadStage.SavingMetadata)
+                docRef.update(
+                    mapOf(
+                        "videoUri" to resolvedVideoUri,
+                        "visibility" to visibility,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                videoUploader.deleteLocalCopy(docRef.id)
+                return@runCatching docRef.id
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    if (createdParentDoc) {
+                        runCatching { deleteMediaChunksBestEffort(docRef, docRef.id) }
+                        runCatching { docRef.delete().await() }
+                    }
+                    runCatching { videoUploader.deleteLocalCopy(docRef.id) }
+                    appContext?.let { runCatching { FirestoreVideoMediaStore.deleteCachedVideo(it, docRef.id) } }
+                }
+                throw e
+            } catch (e: Exception) {
+                withContext(NonCancellable) {
+                    if (createdParentDoc) {
+                        runCatching { deleteMediaChunksBestEffort(docRef, docRef.id) }
+                        runCatching { docRef.delete().await() }
+                    }
+                    runCatching { videoUploader.deleteLocalCopy(docRef.id) }
+                    appContext?.let { runCatching { FirestoreVideoMediaStore.deleteCachedVideo(it, docRef.id) } }
+                }
+                handleFirestoreError(e, OperationType.CREATE, docRef.path)
+                throw e
+            }
         }
 
         onStageChange(VideoUploadStage.SavingMetadata)
@@ -445,12 +540,242 @@ class PulseCastRepository(
         "updatedAt" to FieldValue.serverTimestamp()
     ).filterValues { it != null }.mapValues { it.value!! }
 
+    suspend fun syncLocalVideoToCloud(
+        video: PublishedVideo,
+        uid: String,
+        onProgress: (Float) -> Unit = {}
+    ): Result<String> = runCatching {
+        val ctx = appContext ?: throw IllegalStateException("Application context unavailable.")
+        val localFile = FirebaseStorageVideoUploader.resolveLocalVideoFile(ctx, video.id)
+            ?: throw IllegalStateException("Local video file is no longer present on this device.")
+        val ext = FirestoreVideoMediaStore.sanitizeVideoExtension(localFile.extension)
+        val mimeType = mimeTypeForExtension(ext)
+        val docRef = db.collection("videos").document(video.id)
+
+        when (
+            val outcome = videoUploader.uploadVideo(
+                uid = uid,
+                videoId = video.id,
+                localUri = Uri.fromFile(localFile),
+                mimeType = mimeType,
+                onProgress = onProgress
+            )
+        ) {
+            is VideoUploadOutcome.CloudUploaded -> {
+                docRef.update(
+                    mapOf(
+                        "videoUri" to outcome.downloadUrl,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                videoUploader.deleteLocalCopy(video.id)
+                outcome.downloadUrl
+            }
+            is VideoUploadOutcome.LocalDeviceOnly -> {
+                val sizeBytes = localFile.length()
+                if (sizeBytes <= 0L) {
+                    throw IllegalStateException("Selected local video file is empty.")
+                }
+                if (sizeBytes > MAX_FIRESTORE_VIDEO_BYTES) {
+                    throw VideoTooLargeForFirestoreException(sizeBytes, MAX_FIRESTORE_VIDEO_BYTES)
+                }
+                val cacheFile = FirestoreVideoMediaStore.cloudVideoTargetFile(ctx, video.id, ext)
+                withContext(Dispatchers.IO) {
+                    localFile.inputStream().use { input ->
+                        FirestoreVideoMediaStore.copyStreamWithMaxLimit(input, cacheFile, MAX_FIRESTORE_VIDEO_BYTES)
+                    }
+                }
+                try {
+                    uploadChunksToFirestore(
+                        docRef = docRef,
+                        videoId = video.id,
+                        uid = uid,
+                        mimeType = mimeType,
+                        sourceFile = cacheFile
+                    ) { fraction ->
+                        onProgress(0.05f + 0.90f * fraction)
+                    }
+                    val firestoreUri = FirestoreVideoMediaStore.buildFirestoreMediaUri(video.id, ext)
+                    docRef.update(
+                        mapOf(
+                            "videoUri" to firestoreUri,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                    onProgress(1f)
+                    videoUploader.deleteLocalCopy(video.id)
+                    firestoreUri
+                } catch (e: Exception) {
+                    withContext(NonCancellable) {
+                        runCatching { deleteMediaChunksBestEffort(docRef, video.id) }
+                    }
+                    throw e
+                }
+            }
+        }
+    }
+
+    suspend fun resolveCloudVideoToCache(video: PublishedVideo): Result<String> = runCatching {
+        val ref = FirestoreVideoMediaStore.parseFirestoreMediaUri(video.videoUri)
+            ?: throw IllegalArgumentException("Invalid cloud video URI.")
+        val ctx = appContext ?: throw IllegalStateException("Application context unavailable.")
+
+        FirestoreVideoMediaStore.resolveCachedVideoUri(ctx, video.id, ref.extension)?.let { cached ->
+            return@runCatching cached
+        }
+        FirebaseStorageVideoUploader.resolveLocalVideoUri(ctx, video.id)?.let { local ->
+            return@runCatching local
+        }
+
+        val docRef = db.collection("videos").document(video.id)
+        val chunksSnap = try {
+            docRef.collection("media_chunks")
+                .whereEqualTo("videoId", video.id)
+                .get()
+                .await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "${docRef.path}/media_chunks")
+            throw e
+        }
+
+        val chunks = chunksSnap.documents.mapNotNull { doc ->
+            val idx = doc.getLong("index")?.toInt() ?: return@mapNotNull null
+            val b64 = doc.getString("dataBase64")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            idx to b64
+        }
+        val expectedTotal = chunksSnap.documents.firstOrNull()?.getLong("totalChunks")?.toInt()
+        val targetFile = FirestoreVideoMediaStore.cloudVideoTargetFile(ctx, video.id, ref.extension)
+        val tempFile = File(targetFile.parentFile, "${video.id}.${ref.extension}.downloading")
+
+        withContext(Dispatchers.IO) {
+            try {
+                tempFile.outputStream().use { out ->
+                    FirestoreVideoMediaStore.reassembleOrderedBase64Chunks(chunks, expectedTotal, out)
+                }
+                if (targetFile.exists()) targetFile.delete()
+                if (!tempFile.renameTo(targetFile)) {
+                    tempFile.copyTo(targetFile, overwrite = true)
+                    tempFile.delete()
+                }
+            } catch (e: Exception) {
+                runCatching { tempFile.delete() }
+                throw e
+            }
+        }
+        Uri.fromFile(targetFile).toString()
+    }
+
+    private suspend fun prepareCloudSyncFile(
+        context: Context,
+        videoId: String,
+        extension: String,
+        localFilePath: String?,
+        localVideoUri: Uri
+    ): File = withContext(Dispatchers.IO) {
+        val targetFile = FirestoreVideoMediaStore.cloudVideoTargetFile(context, videoId, extension)
+        try {
+            val localFile = localFilePath?.let(::File)?.takeIf { it.isFile && it.length() > 0L }
+            val copiedBytes = if (localFile != null) {
+                val length = localFile.length()
+                if (length > MAX_FIRESTORE_VIDEO_BYTES) {
+                    throw VideoTooLargeForFirestoreException(length, MAX_FIRESTORE_VIDEO_BYTES)
+                }
+                localFile.inputStream().use { input ->
+                    FirestoreVideoMediaStore.copyStreamWithMaxLimit(input, targetFile, MAX_FIRESTORE_VIDEO_BYTES)
+                }
+            } else {
+                context.contentResolver.openInputStream(localVideoUri)?.use { input ->
+                    FirestoreVideoMediaStore.copyStreamWithMaxLimit(input, targetFile, MAX_FIRESTORE_VIDEO_BYTES)
+                } ?: throw IllegalStateException("Unable to read the selected video file.")
+            }
+            if (copiedBytes <= 0L) {
+                throw IllegalStateException("Selected video file is empty.")
+            }
+            targetFile
+        } catch (e: Exception) {
+            runCatching { targetFile.delete() }
+            videoUploader.deleteLocalCopy(videoId)
+            throw e
+        }
+    }
+
+    private suspend fun uploadChunksToFirestore(
+        docRef: DocumentReference,
+        videoId: String,
+        uid: String,
+        mimeType: String,
+        sourceFile: File,
+        onFraction: (Float) -> Unit
+    ) {
+        val chunksCollection = docRef.collection("media_chunks")
+        var batch = db.batch()
+        var pendingInBatch = 0
+        var uploadedCount = 0
+
+        FirestoreVideoMediaStore.streamFileAsBase64Chunks(sourceFile) { index, totalChunks, base64 ->
+            val chunkDoc = chunksCollection.document("chunk_$index")
+            batch.set(
+                chunkDoc,
+                mapOf(
+                    "videoId" to videoId,
+                    "authorId" to uid,
+                    "index" to index,
+                    "totalChunks" to totalChunks,
+                    "mimeType" to mimeType.take(64),
+                    "dataBase64" to base64,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
+            pendingInBatch++
+            if (pendingInBatch >= 2 || index == totalChunks - 1) {
+                batch.commit().await()
+                uploadedCount = index + 1
+                onFraction((uploadedCount.toFloat() / totalChunks.toFloat()).coerceIn(0f, 1f))
+                batch = db.batch()
+                pendingInBatch = 0
+            }
+        }
+    }
+
+    private suspend fun deleteMediaChunksBestEffort(docRef: DocumentReference, videoId: String) {
+        val snap = runCatching {
+            docRef.collection("media_chunks")
+                .whereEqualTo("videoId", videoId)
+                .get()
+                .await()
+        }.getOrNull() ?: return
+        if (snap.isEmpty) return
+        val docs = snap.documents
+        var idx = 0
+        while (idx < docs.size) {
+            val end = (idx + 200).coerceAtMost(docs.size)
+            val batch = db.batch()
+            for (i in idx until end) {
+                batch.delete(docs[i].reference)
+            }
+            runCatching { batch.commit().await() }
+            idx = end
+        }
+    }
+
+    private fun mimeTypeForExtension(extension: String): String = when (extension.lowercase()) {
+        "webm" -> "video/webm"
+        "mov" -> "video/quicktime"
+        "3gp" -> "video/3gpp"
+        "mkv" -> "video/x-matroska"
+        else -> "video/mp4"
+    }
+
     suspend fun deleteVideo(videoId: String): Result<Unit> = runCatching {
         val docRef = db.collection("videos").document(videoId)
         try {
             val videoUri = runCatching { docRef.get().await().getString("videoUri") }.getOrNull()
+            deleteMediaChunksBestEffort(docRef, videoId)
             docRef.delete().await()
             videoUploader.deleteLocalCopy(videoId)
+            appContext?.let { FirestoreVideoMediaStore.deleteCachedVideo(it, videoId) }
             if (!videoUri.isNullOrBlank()) {
                 videoUploader.deleteByDownloadUrl(videoUri)
             }
@@ -467,21 +792,43 @@ class PulseCastRepository(
         emitAll(docRef.snapshots().map { it.exists() })
     }
 
+    fun observeLikedVideoIds(videoIds: List<String>, uid: String): Flow<Set<String>> {
+        val cleanIds = videoIds.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.isEmpty() || uid.isBlank()) return flowOf(emptySet())
+        val docFlows = cleanIds.map { videoId ->
+            db.collection("videos").document(videoId)
+                .collection("likes").document(uid)
+                .snapshots()
+                .map { snap -> if (snap.exists()) videoId else null }
+                .catch { emit(null) }
+        }
+        return combine(docFlows) { results ->
+            results.filterNotNull().toSet()
+        }
+    }
+
     suspend fun toggleVideoLike(videoId: String, uid: String): Result<Boolean> = runCatching {
+        if (videoId.isBlank() || uid.isBlank()) {
+            throw IllegalArgumentException("Video ID and user ID must not be blank.")
+        }
         val videoRef = db.collection("videos").document(videoId)
         val likeRef = videoRef.collection("likes").document(uid)
         try {
-            val currentlyLiked = likeRef.get().await().exists()
+            val likeSnap = likeRef.get().await()
+            val currentlyLiked = likeSnap.exists()
             val batch = db.batch()
             if (currentlyLiked) {
+                val currentLikes = (videoRef.get().await().getLong("likesCount") ?: 0L).coerceAtLeast(0L)
                 batch.delete(likeRef)
-                batch.update(
-                    videoRef,
-                    mapOf(
-                        "likesCount" to FieldValue.increment(-1L),
-                        "updatedAt" to FieldValue.serverTimestamp()
+                if (currentLikes > 0L) {
+                    batch.update(
+                        videoRef,
+                        mapOf(
+                            "likesCount" to FieldValue.increment(-1L),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
                     )
-                )
+                }
             } else {
                 batch.set(
                     likeRef,

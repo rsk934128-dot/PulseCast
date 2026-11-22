@@ -202,6 +202,8 @@ private fun PulseCastMainShell(
     val creatorsState by viewModel.creatorsState.collectAsStateWithLifecycle()
     val publicVideosState by viewModel.publicVideosState.collectAsStateWithLifecycle()
     val inspectingCreator by viewModel.inspectingCreator.collectAsStateWithLifecycle()
+    val likedVideoIds by viewModel.likedVideoIds.collectAsStateWithLifecycle()
+    val likingVideoIds by viewModel.likingVideoIds.collectAsStateWithLifecycle()
     val pendingNotificationAction by CallActionBus.pendingAction.collectAsStateWithLifecycle()
 
     val creatorsById = remember(creatorsState) {
@@ -485,7 +487,10 @@ private fun PulseCastMainShell(
                     onEditOwnProfile = {
                         viewModel.closeCreatorProfile()
                         currentTab = PulseTab.STUDIO
-                    }
+                    },
+                    likedVideoIds = likedVideoIds,
+                    likingVideoIds = likingVideoIds,
+                    onToggleLike = { video -> viewModel.toggleVideoLike(video.id) }
                 )
             }
         }

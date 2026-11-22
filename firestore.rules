@@ -201,7 +201,7 @@ service cloud.firestore {
                        incoming().authorId == existing().authorId &&
                        incoming().createdAt == existing().createdAt && (
                          ((existing().authorId == request.auth.uid || isAdmin()) &&
-                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'visibility', 'updatedAt'])) ||
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'videoUri', 'visibility', 'updatedAt'])) ||
                          (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']) &&
                           incoming().likesCount == existing().likesCount + 1 &&
                           existsAfter(/databases/$(database)/documents/videos/$(videoId)/likes/$(request.auth.uid))) ||
@@ -214,6 +214,51 @@ service cloud.firestore {
                        );
 
       allow delete: if isSignedIn() && isValidId(videoId) && (existing().authorId == request.auth.uid || isAdmin());
+
+      function isValidMediaChunk(data) {
+        return data.videoId is string && data.videoId.size() >= 1 && data.videoId.size() <= 128 &&
+               data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
+               data.index is int && data.index >= 0 && data.index <= 64 &&
+               data.totalChunks is int && data.totalChunks >= 1 && data.totalChunks <= 65 &&
+               data.mimeType is string && data.mimeType.size() >= 1 && data.mimeType.size() <= 64 &&
+               data.dataBase64 is string && data.dataBase64.size() >= 1 && data.dataBase64.size() <= 700000 &&
+               isValidTimestamp(data.createdAt);
+      }
+
+      match /media_chunks/{chunkId} {
+        allow get: if isSignedIn() &&
+                      isValidId(videoId) &&
+                      isValidId(chunkId) &&
+                      exists(/databases/$(database)/documents/videos/$(videoId)) &&
+                      (get(/databases/$(database)/documents/videos/$(videoId)).data.visibility == 'public' ||
+                       get(/databases/$(database)/documents/videos/$(videoId)).data.authorId == request.auth.uid ||
+                       isAdmin());
+
+        allow list: if isSignedIn() &&
+                       isValidId(videoId) &&
+                       resource.data.videoId == videoId &&
+                       exists(/databases/$(database)/documents/videos/$(videoId)) &&
+                       (get(/databases/$(database)/documents/videos/$(videoId)).data.visibility == 'public' ||
+                        get(/databases/$(database)/documents/videos/$(videoId)).data.authorId == request.auth.uid ||
+                        isAdmin());
+
+        allow create: if isSignedIn() &&
+                         isValidId(videoId) &&
+                         isValidId(chunkId) &&
+                         incoming().keys().hasAll(['videoId', 'authorId', 'index', 'totalChunks', 'mimeType', 'dataBase64', 'createdAt']) &&
+                         incoming().keys().hasOnly(['videoId', 'authorId', 'index', 'totalChunks', 'mimeType', 'dataBase64', 'createdAt']) &&
+                         isValidMediaChunk(incoming()) &&
+                         incoming().videoId == videoId &&
+                         incoming().authorId == request.auth.uid &&
+                         exists(/databases/$(database)/documents/videos/$(videoId)) &&
+                         get(/databases/$(database)/documents/videos/$(videoId)).data.authorId == request.auth.uid;
+
+        allow update: if false;
+        allow delete: if isSignedIn() &&
+                         isValidId(videoId) &&
+                         isValidId(chunkId) &&
+                         (existing().authorId == request.auth.uid || isAdmin());
+      }
 
       match /likes/{userId} {
         allow get: if isSignedIn() && isValidId(videoId) && isValidId(userId) && request.auth.uid == userId;

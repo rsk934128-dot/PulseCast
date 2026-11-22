@@ -99,6 +99,26 @@ data class PublishedVideo(
     @ServerTimestamp val updatedAt: Timestamp? = null
 )
 
+const val PULSECAST_SHARE_BASE_URL: String =
+    "https://ais-pre-dofgxbkngvc4krc7wuq3gc-203938555597.asia-southeast1.run.app"
+
+fun resolveVideoShareUrl(
+    video: PublishedVideo,
+    fallbackBaseUrl: String = PULSECAST_SHARE_BASE_URL
+): String {
+    val directUri = video.videoUri?.trim().orEmpty()
+    if (directUri.startsWith("https://", ignoreCase = true) ||
+        directUri.startsWith("http://", ignoreCase = true)
+    ) {
+        return directUri
+    }
+    val cleanBase = fallbackBaseUrl.trimEnd('/')
+    val cleanId = video.id.trim()
+    if (cleanId.isBlank()) return cleanBase
+    val encodedId = java.net.URLEncoder.encode(cleanId, Charsets.UTF_8.name())
+    return "$cleanBase/?videoId=$encodedId"
+}
+
 @IgnoreExtraProperties
 data class VideoComment(
     @DocumentId val id: String = "",

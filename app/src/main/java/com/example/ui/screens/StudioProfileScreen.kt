@@ -96,6 +96,10 @@ fun StudioProfileScreen(
     val uploadState by viewModel.videoUploadState.collectAsStateWithLifecycle()
     val comments by viewModel.selectedVideoComments.collectAsStateWithLifecycle()
     val isLiked by viewModel.isSelectedVideoLiked.collectAsStateWithLifecycle()
+    val likedVideoIds by viewModel.likedVideoIds.collectAsStateWithLifecycle()
+    val likingVideoIds by viewModel.likingVideoIds.collectAsStateWithLifecycle()
+    val playbackSources by viewModel.playbackSources.collectAsStateWithLifecycle()
+    val syncingVideoIds by viewModel.syncingVideoIds.collectAsStateWithLifecycle()
 
     val authPhotoUrl = remember(viewModel.currentUserId) {
         runCatching { Firebase.auth.currentUser?.photoUrl?.toString() }.getOrNull()
@@ -142,11 +146,18 @@ fun StudioProfileScreen(
         }
     }
 
+    LaunchedEffect(selectedVideo?.id, selectedVideo?.videoUri) {
+        selectedVideo?.let { video ->
+            viewModel.resolvePlaybackForVideo(video, context)
+        }
+    }
+
     if (selectedVideo != null) {
         BackHandler {
             viewingVideoId = null
             viewModel.selectVideo(null)
         }
+        val playbackState = playbackSources[viewModel.playbackKey(selectedVideo)]
         VideoDetailScreen(
             video = selectedVideo,
             isOwnedByUser = selectedVideo.authorId == viewModel.currentUserId,
@@ -164,7 +175,11 @@ fun StudioProfileScreen(
                     viewModel.selectVideo(null)
                 }
             },
-            modifier = modifier
+            modifier = modifier,
+            playbackState = playbackState,
+            onRetryPlayback = { viewModel.resolvePlaybackForVideo(selectedVideo, context, forceReload = true) },
+            onSyncLocalToCloud = { viewModel.syncLocalVideoToCloud(selectedVideo) },
+            isSyncingToCloud = selectedVideo.id in syncingVideoIds
         )
     } else {
         StudioProfileContent(
@@ -210,7 +225,10 @@ fun StudioProfileScreen(
                 )
             },
             onResetGooglePhoto = { viewModel.updateProfilePhoto(null) },
-            onViewCreatorProfile = { creator -> viewModel.openCreatorProfile(creator) }
+            onViewCreatorProfile = { creator -> viewModel.openCreatorProfile(creator) },
+            likedVideoIds = likedVideoIds,
+            likingVideoIds = likingVideoIds,
+            onToggleLike = { video -> viewModel.toggleVideoLike(video.id) }
         )
     }
 
@@ -286,7 +304,10 @@ fun StudioProfileContent(
     discoverableCreators: List<CreatorProfile> = emptyList(),
     onPickNewPhoto: () -> Unit = {},
     onResetGooglePhoto: () -> Unit = {},
-    onViewCreatorProfile: (CreatorProfile) -> Unit = {}
+    onViewCreatorProfile: (CreatorProfile) -> Unit = {},
+    likedVideoIds: Set<String> = emptySet(),
+    likingVideoIds: Set<String> = emptySet(),
+    onToggleLike: (PublishedVideo) -> Unit = {}
 ) {
     var displayName by remember(initialDisplayName) { mutableStateOf(initialDisplayName) }
     var handle by remember(initialHandle) { mutableStateOf(initialHandle) }
@@ -544,7 +565,10 @@ fun StudioProfileContent(
                         items(filteredVideos, key = { it.id }) { video ->
                             UploadedVideoListItem(
                                 video = video,
+                                isLiked = video.id in likedVideoIds,
+                                isLikeUpdating = video.id in likingVideoIds,
                                 onClick = { onVideoClick(video) },
+                                onLikeClick = { onToggleLike(video) },
                                 onDeleteClick = { pendingDeleteVideo = video }
                             )
                         }

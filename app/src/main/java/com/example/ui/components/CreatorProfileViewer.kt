@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -59,6 +60,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -85,7 +89,10 @@ fun CreatorProfileDialog(
     onVideoCallClick: (CreatorProfile) -> Unit,
     onVideoClick: (PublishedVideo) -> Unit,
     onEditOwnProfile: () -> Unit = {},
-    nowMillis: Long = System.currentTimeMillis()
+    nowMillis: Long = System.currentTimeMillis(),
+    likedVideoIds: Set<String> = emptySet(),
+    likingVideoIds: Set<String> = emptySet(),
+    onToggleLike: (PublishedVideo) -> Unit = {}
 ) {
     var showFullPhotoLightbox by remember { mutableStateOf(false) }
 
@@ -125,7 +132,10 @@ fun CreatorProfileDialog(
                     onAudioCallClick = { onAudioCallClick(creator) },
                     onVideoCallClick = { onVideoCallClick(creator) },
                     onVideoClick = onVideoClick,
-                    onEditOwnProfile = onEditOwnProfile
+                    onEditOwnProfile = onEditOwnProfile,
+                    likedVideoIds = likedVideoIds,
+                    likingVideoIds = likingVideoIds,
+                    onToggleLike = onToggleLike
                 )
             }
         }
@@ -155,7 +165,10 @@ internal fun CreatorProfileContent(
     onAudioCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
     onVideoClick: (PublishedVideo) -> Unit,
-    onEditOwnProfile: () -> Unit = {}
+    onEditOwnProfile: () -> Unit = {},
+    likedVideoIds: Set<String> = emptySet(),
+    likingVideoIds: Set<String> = emptySet(),
+    onToggleLike: (PublishedVideo) -> Unit = {}
 ) {
     val isOnline = creator.isRecentlyOnline(nowMillis)
     val totalLikes = remember(creatorVideos) { creatorVideos.sumOf { it.likesCount } }
@@ -508,18 +521,62 @@ internal fun CreatorProfileContent(
                                     color = MaterialTheme.colorScheme.primary
                                 )
                                 Row(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Favorite,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.tertiary,
-                                            modifier = Modifier.size(12.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(3.dp))
-                                        Text("${video.likesCount}", style = MaterialTheme.typography.labelSmall)
+                                    val isVideoLiked = video.id in likedVideoIds
+                                    val isLikeUpdating = video.id in likingVideoIds
+                                    val likeActionDescription = if (isVideoLiked) {
+                                        stringResource(R.string.feed_unlike_video, video.title)
+                                    } else {
+                                        stringResource(R.string.feed_like_video, video.title)
+                                    }
+                                    Surface(
+                                        color = if (isVideoLiked) {
+                                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.72f)
+                                        } else {
+                                            Color.Transparent
+                                        },
+                                        shape = RoundedCornerShape(50),
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .clip(RoundedCornerShape(50))
+                                            .clickable(
+                                                enabled = !isLikeUpdating,
+                                                role = Role.Button,
+                                                onClick = { onToggleLike(video) }
+                                            )
+                                            .semantics { contentDescription = likeActionDescription }
+                                            .testTag("creator_profile_like_button_${video.id}")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isVideoLiked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                                                contentDescription = null,
+                                                tint = if (isVideoLiked) {
+                                                    MaterialTheme.colorScheme.tertiary
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "${video.likesCount}",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontWeight = if (isVideoLiked) FontWeight.Bold else FontWeight.Medium
+                                                ),
+                                                color = if (isVideoLiked) {
+                                                    MaterialTheme.colorScheme.onTertiaryContainer
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                },
+                                                modifier = Modifier.testTag("creator_profile_like_count_${video.id}")
+                                            )
+                                        }
                                     }
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(

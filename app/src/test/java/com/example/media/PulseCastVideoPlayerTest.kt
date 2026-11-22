@@ -97,6 +97,20 @@ class PulseCastVideoPlayerTest {
         assertEquals(0f, fakePlayer.volumeValue, 0.01f)
         composeRule.onNodeWithContentDescription("Unmute audio").assertIsDisplayed()
 
+        // Unmute restores previous volume
+        composeRule.onNodeWithTag("video_mute_button").performClick()
+        assertTrue(fakePlayer.volumeValue > 0f)
+        composeRule.onNodeWithContentDescription("Mute audio").assertIsDisplayed()
+
+        // Bottom bar play/pause button
+        composeRule.onNodeWithTag("video_bar_play_pause_button").performClick()
+        assertTrue(fakePlayer.isPlayingValue)
+        composeRule.onNodeWithTag("video_bar_play_pause_button").performClick()
+        assertFalse(fakePlayer.isPlayingValue)
+
+        // Volume slider visible in standard layout
+        composeRule.onNodeWithTag("video_volume_slider").assertIsDisplayed()
+
         // Speed cycle 1.0x -> 1.5x -> 2.0x
         composeRule.onNodeWithText("1.0x").assertIsDisplayed()
         composeRule.onNodeWithTag("video_speed_button").performClick()
@@ -105,6 +119,47 @@ class PulseCastVideoPlayerTest {
         composeRule.onNodeWithTag("video_speed_button").performClick()
         assertEquals(2.0f, fakePlayer.speedValue, 0.01f)
         composeRule.onNodeWithText("2.0x").assertIsDisplayed()
+    }
+
+    @Test
+    fun fullscreenToggle_opensAndExitsFullscreenPreservingPlaybackState() {
+        val fakePlayer = FakeMedia3Player().apply {
+            stateValue = Player.STATE_READY
+            durationValue = 120_000L
+            currentPositionValue = 42_000L
+            volumeValue = 0.7f
+        }
+        var fullscreenState = false
+
+        composeRule.setContent {
+            PulseCastTheme {
+                PulseCastVideoPlayer(
+                    videoUri = "https://example.com/studio.mp4",
+                    autoPlay = false,
+                    externalPlayer = fakePlayer,
+                    renderSurface = false,
+                    onFullscreenChange = { fullscreenState = it },
+                    modifier = Modifier.fillMaxWidth().height(240.dp)
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Enter fullscreen").assertIsDisplayed()
+        composeRule.onNodeWithTag("video_fullscreen_button").performClick()
+        composeRule.waitForIdle()
+
+        assertTrue(fullscreenState)
+        composeRule.onNodeWithTag("video_fullscreen_dialog").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Exit fullscreen").assertIsDisplayed()
+        composeRule.onNodeWithTag("video_time_label").assertTextEquals("00:42 / 02:00")
+        assertEquals(0.7f, fakePlayer.volumeValue, 0.01f)
+
+        composeRule.onNodeWithTag("video_fullscreen_button").performClick()
+        composeRule.waitForIdle()
+
+        assertFalse(fullscreenState)
+        composeRule.onNodeWithTag("video_fullscreen_dialog").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Enter fullscreen").assertIsDisplayed()
     }
 
     @Test

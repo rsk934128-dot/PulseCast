@@ -38,7 +38,7 @@ interface VideoFileUploader {
 }
 
 class FirebaseStorageVideoUploader(
-    private val appContext: Context? = null,
+    internal val appContext: Context? = null,
     storageProvider: () -> FirebaseStorage = { Firebase.storage }
 ) : VideoFileUploader {
 
@@ -116,10 +116,10 @@ class FirebaseStorageVideoUploader(
             }
         }
 
-        // Neither Storage bucket is provisioned (HTTP 404). Persist locally and allow Firestore metadata publish.
+        // Neither Storage bucket is provisioned (HTTP 404). Persist locally and allow Firestore cloud-chunk sync.
         Log.i(TAG, "Firebase Storage bucket not provisioned; saving local playable clip for $videoId")
         val savedPath = persistLocalVideoCopy(videoId = videoId, extension = extension, localUri = localUri)
-        onProgress(1f)
+        onProgress(0.05f)
         return VideoUploadOutcome.LocalDeviceOnly(savedPath)
     }
 
@@ -266,13 +266,17 @@ class FirebaseStorageVideoUploader(
             else -> "mp4"
         }
 
-        fun resolveLocalVideoUri(context: Context, videoId: String): String? {
+        fun resolveLocalVideoFile(context: Context, videoId: String): File? {
             if (videoId.isBlank()) return null
             val dir = File(context.filesDir, LOCAL_VIDEOS_DIR)
             if (!dir.exists()) return null
-            val match = dir.listFiles { file ->
+            return dir.listFiles { file ->
                 file.isFile && file.length() > 0L && file.name.startsWith("$videoId.")
-            }?.firstOrNull() ?: return null
+            }?.firstOrNull()
+        }
+
+        fun resolveLocalVideoUri(context: Context, videoId: String): String? {
+            val match = resolveLocalVideoFile(context, videoId) ?: return null
             return Uri.fromFile(match).toString()
         }
 

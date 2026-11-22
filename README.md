@@ -154,6 +154,12 @@ npm install
 npm run dev
 ```
 
+### Package with PWABuilder (`https://www.pwabuilder.com`)
+The `web/` companion includes everything required for a full **PWABuilder** score and Android/Desktop/iOS packaging:
+- **Web App Manifest (`web/public/manifest.webmanifest`)**: Configured with `id`, `name`, `short_name`, `start_url`, `scope`, `display: "standalone"`, `display_override`, `192x192` & `512x512` `any` + `maskable` PNG icons, `wide` + `narrow` screenshots, and deep-linked app shortcuts (`/?tab=feed`, `chats`, `calls`, `profile`).
+- **Service Worker & Offline Support (`web/public/sw.js`, `web/public/offline.html`)**: Registered at `/` scope with pre-cached shell assets, network-first navigation fallback, and automatic network pass-through for Firebase endpoints.
+- **Android TWA Verification (`web/public/.well-known/assetlinks.json`)**: Pre-populated for `com.aistudio.pulsecast.vktmrx`; append your Google Play App Signing SHA-256 fingerprint before submitting the PWABuilder Android AAB to Google Play.
+
 ---
 
 ## GitHub Actions Android APK Release

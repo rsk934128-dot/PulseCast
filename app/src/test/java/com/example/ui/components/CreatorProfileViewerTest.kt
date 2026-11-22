@@ -3,6 +3,9 @@ package com.example.ui.components
 import android.graphics.Bitmap
 import android.util.Base64
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasTestTag
@@ -221,5 +224,72 @@ class CreatorProfileViewerTest {
 
         composeRule.onNodeWithTag("photo_lightbox_close_button").performClick()
         assertTrue(dismissed)
+    }
+
+    @Test
+    fun creatorProfileContent_videoCardLikeButton_togglesWithoutOpeningVideo() {
+        var videos by androidx.compose.runtime.mutableStateOf(
+            listOf(
+                PublishedVideo(
+                    id = "vid_c_1",
+                    authorId = "uid_farid",
+                    authorName = "Sheikh Farid",
+                    title = "Live Jam Clip",
+                    category = "Music",
+                    visibility = "public",
+                    likesCount = 11L,
+                    commentsCount = 2L,
+                    durationSec = 85L
+                )
+            )
+        )
+        var likedIds by androidx.compose.runtime.mutableStateOf(emptySet<String>())
+        var clickedVideoId: String? = null
+        val toggleCalls = mutableListOf<String>()
+
+        composeRule.setContent {
+            PulseCastTheme {
+                CreatorProfileContent(
+                    creator = CreatorProfile(
+                        userId = "uid_farid",
+                        displayName = "Sheikh Farid",
+                        handle = "sheikh_farid"
+                    ),
+                    isCurrentUser = false,
+                    creatorVideos = videos,
+                    onClose = {},
+                    onMessageClick = {},
+                    onAudioCallClick = {},
+                    onVideoCallClick = {},
+                    onVideoClick = { clickedVideoId = it.id },
+                    likedVideoIds = likedIds,
+                    onToggleLike = { video ->
+                        toggleCalls += video.id
+                        val currentlyLiked = video.id in likedIds
+                        likedIds = if (currentlyLiked) likedIds - video.id else likedIds + video.id
+                        videos = videos.map { item ->
+                            if (item.id == video.id) {
+                                item.copy(likesCount = if (currentlyLiked) item.likesCount - 1L else item.likesCount + 1L)
+                            } else {
+                                item
+                            }
+                        }
+                    }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("creator_profile_list")
+            .performScrollToNode(hasTestTag("creator_profile_video_vid_c_1"))
+        composeRule.onNodeWithTag("creator_profile_like_button_vid_c_1").assertIsDisplayed()
+        composeRule.onNodeWithTag("creator_profile_like_count_vid_c_1", useUnmergedTree = true)
+            .assertTextContains("11")
+
+        composeRule.onNodeWithTag("creator_profile_like_button_vid_c_1").performClick()
+
+        assertEquals(listOf("vid_c_1"), toggleCalls)
+        assertEquals(null, clickedVideoId)
+        composeRule.onNodeWithTag("creator_profile_like_count_vid_c_1", useUnmergedTree = true)
+            .assertTextContains("12")
     }
 }

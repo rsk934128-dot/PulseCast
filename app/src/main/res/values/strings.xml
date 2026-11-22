@@ -22,12 +22,16 @@
     <string name="video_player_play">Play video</string>
     <string name="video_player_pause">Pause video</string>
     <string name="video_player_replay">Replay video</string>
+    <string name="video_player_toggle_playback">Toggle play or pause</string>
     <string name="video_player_mute">Mute audio</string>
     <string name="video_player_unmute">Unmute audio</string>
+    <string name="video_player_volume">Volume</string>
+    <string name="video_player_enter_fullscreen">Enter fullscreen</string>
+    <string name="video_player_exit_fullscreen">Exit fullscreen</string>
     <string name="video_player_retry">Retry</string>
     <string name="video_player_error_fallback">Unable to play this video source.</string>
     <string name="upload_form_title">Upload Video</string>
-    <string name="upload_form_subtitle">Video files store in Firebase Storage · Metadata saves to Firestore</string>
+    <string name="upload_form_subtitle">Videos sync to Cloud for all users · Metadata saves to Firestore</string>
     <string name="upload_form_close">Close upload form</string>
     <string name="upload_select_file">Select Video File</string>
     <string name="upload_change_file">Change File</string>
@@ -36,7 +40,7 @@
     <string name="upload_change_cover">Cover Photo</string>
     <string name="upload_submit_storage">Upload &amp; Publish</string>
     <string name="upload_submit_metadata">Publish Video</string>
-    <string name="upload_uploading_video">Uploading video to Firebase Storage…</string>
+    <string name="upload_uploading_video">Uploading video to Cloud…</string>
     <string name="upload_saving_metadata">Saving video metadata to Firestore…</string>
     <string name="upload_title_required">Please enter a title before publishing.</string>
     <string name="upload_invalid_url">Enter a valid http:// or https:// stream URL, or select a video file.</string>
@@ -78,4 +82,17 @@
     <string name="creator_profile_video_call">Video Call</string>
     <string name="creator_profile_no_videos">No public videos uploaded yet.</string>
     <string name="creator_profile_directory_title">Creator Profiles</string>
+    <string name="feed_like_video">Like %1$s</string>
+    <string name="feed_unlike_video">Unlike %1$s</string>
+    <string name="feed_share_video">Share</string>
+    <string name="feed_share_video_copied">Copied</string>
+    <string name="feed_share_video_cd">Copy direct link for %1$s</string>
+    <string name="feed_share_link_copied_snackbar">Video link copied to clipboard</string>
+    <string name="video_detail_loading_cloud">Loading cloud video &amp; audio…</string>
+    <string name="video_detail_unavailable_cloud">Video &amp; audio unavailable on this device</string>
+    <string name="video_detail_unavailable_subtitle">The uploader saved this clip on their device only. Ask them to sync or re-upload it.</string>
+    <string name="video_detail_local_only_warning">Saved on this device only — others cannot play or hear it yet.</string>
+    <string name="video_detail_sync_cloud">Sync to Cloud</string>
+    <string name="video_detail_syncing_cloud">Syncing…</string>
+    <string name="upload_large_file_hint">Note: Clips up to 24 MB sync automatically. Larger files require Firebase Storage enabled in Firebase Console or a stream URL.</string>
 </resources>

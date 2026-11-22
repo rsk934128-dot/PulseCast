@@ -1,0 +1,127 @@
+{
+  "id": "/",
+  "name": "PulseCast",
+  "short_name": "PulseCast",
+  "description": "Audio-video calling, real-time messaging, and creator video publishing platform synced across Android and Web.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#070a12",
+  "theme_color": "#0f1524",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": [
+    "social",
+    "entertainment",
+    "productivity"
+  ],
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": [
+      "focus-existing",
+      "auto"
+    ]
+  },
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "PulseCast creator video feed, real-time chats, and studio controls"
+    },
+    {
+      "src": "/screenshots/narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "PulseCast mobile PWA feed, messaging, and live calling"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Video Feed",
+      "short_name": "Feed",
+      "description": "Browse published creator videos",
+      "url": "/?tab=feed",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "short_name": "Chats",
+      "description": "Open real-time creator chats",
+      "url": "/?tab=chats",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Audio & Video Calls",
+      "short_name": "Calls",
+      "description": "Start or join a live call room",
+      "url": "/?tab=calls",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Creator Studio",
+      "short_name": "Studio",
+      "description": "Manage your creator profile and videos",
+      "url": "/?tab=profile",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}
