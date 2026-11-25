@@ -227,6 +227,18 @@ class PulseCastViewModel(
             else repository.observeCallSignals(callId, currentUserId).catch { emit(emptyList()) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
+    val incomingCallSession: StateFlow<CallSession?> =
+        combine(callsState, _activeCallId, _dismissedIncomingCallIds) { state, activeId, dismissed ->
+            if (!activeId.isNullOrBlank()) return@combine null
+            val sessions = (state as? UiState.Success)?.data.orEmpty()
+            val nowMs = System.currentTimeMillis()
+            sessions.firstOrNull { session ->
+                session.isFreshRingingForUser(currentUserId, nowMs) &&
+                    session.id !in dismissed &&
+                    session.roomCode !in dismissed
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
     val callParticipantProfiles: StateFlow<Map<String, CreatorProfile>> =
         combine(activeCallSession, incomingCallSession, callsState) { active, incoming, state ->
             val fromActiveAndIncoming = buildList {
@@ -255,18 +267,6 @@ class PulseCastViewModel(
                 else repository.observeCreatorPresence(peerIds).catch { emit(emptyMap()) }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyMap())
-
-    val incomingCallSession: StateFlow<CallSession?> =
-        combine(callsState, _activeCallId, _dismissedIncomingCallIds) { state, activeId, dismissed ->
-            if (!activeId.isNullOrBlank()) return@combine null
-            val sessions = (state as? UiState.Success)?.data.orEmpty()
-            val nowMs = System.currentTimeMillis()
-            sessions.firstOrNull { session ->
-                session.isFreshRingingForUser(currentUserId, nowMs) &&
-                    session.id !in dismissed &&
-                    session.roomCode !in dismissed
-            }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
 
     private val isBootstrappedSuperAdmin: Boolean =
         currentUserEmail.equals(BOOTSTRAPPED_ADMIN_EMAIL, ignoreCase = true) && currentUserEmailVerified

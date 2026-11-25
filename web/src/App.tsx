@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { Download, Film, LogOut, MessageSquare, PhoneCall, Radio, ShieldCheck, UserCircle } from "lucide-react";
 import { auth, hasWebFirebaseConfig } from "./firebase";
+import { callAudio } from "./callAudio";
 import {
+  createCallSession,
+  createChatThread,
+  declineCallSession,
   ensureUserAndCreatorInitialized,
+  joinCallSession,
   observeAdmins,
   observeAllCallSessionsForAdmin,
   observeAllCreatorsForAdmin,
@@ -15,7 +20,10 @@ import {
   observeIsAdminDoc,
   observeMyVideos,
   observePublicVideos,
-  observeUserAccount
+  observeUserAccount,
+  sendMessage,
+  toTimestampMillis,
+  updateUserActivity
 } from "./repository";
 import { AuthView } from "./components/AuthView";
 import { FeedView } from "./components/FeedView";
@@ -23,6 +31,9 @@ import { ChatsView } from "./components/ChatsView";
 import { CallsView } from "./components/CallsView";
 import { ProfileView } from "./components/ProfileView";
 import { AdminView } from "./components/AdminView";
+import { IncomingCallModal } from "./components/IncomingCallModal";
+import { CreatorProfileModal } from "./components/CreatorProfileModal";
+import { UserAvatar } from "./components/UserAvatar";
 import type {
   AdminRecord,
   CallSession,
@@ -49,6 +60,7 @@ function getInitialTabFromUrl(): TabId {
 }
 
 const BOOTSTRAPPED_ADMIN_EMAIL = "rsk755734@gmail.com";
+const CALL_RING_WINDOW_MS = 3 * 60 * 1000;
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -61,6 +73,10 @@ export function App() {
   const [myVideos, setMyVideos] = useState<PublishedVideo[]>([]);
   const [chats, setChats] = useState<ChatThread[]>([]);
   const [callSessions, setCallSessions] = useState<CallSession[]>([]);
+  const [activeCall, setActiveCall] = useState<CallSession | null>(null);
+  const [dismissedCallIds, setDismissedCallIds] = useState<Set<string>>(() => new Set());
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const [selectedCreatorProfile, setSelectedCreatorProfile] = useState<CreatorProfile | null>(null);
   const [hasAdminDoc, setHasAdminDoc] = useState(false);
   const [adminVideos, setAdminVideos] = useState<PublishedVideo[]>([]);
   const [adminCreators, setAdminCreators] = useState<CreatorProfile[]>([]);
@@ -99,6 +115,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const uninstallGesture = callAudio.installGestureUnlock();
+    const unsubBlocked = callAudio.subscribeBlocked(setAudioBlocked);
+    return () => {
+      uninstallGesture();
+      unsubBlocked();
+      callAudio.stopIncomingRingtone();
+      callAudio.stopOutgoingRingback();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!auth) {
       setAuthReady(true);
       return;
@@ -111,7 +138,8 @@ export function App() {
           await ensureUserAndCreatorInitialized(
             nextUser.uid,
             nextUser.displayName || "PulseCast Creator",
-            nextUser.email || ""
+            nextUser.email || "",
+            nextUser.photoURL
           );
         } catch (err) {
           notify(err instanceof Error ? err.message : "Could not initialize creator profile.");
@@ -146,8 +174,21 @@ export function App() {
       observeCallSessions(user.uid, setCallSessions, (e) => notify(e.message)),
       observeIsAdminDoc(user.uid, setHasAdminDoc)
     ];
+
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void updateUserActivity(user.uid, true).catch(() => {});
+      }
+    }, 60_000);
+    const onVisibilityChange = () => {
+      void updateUserActivity(user.uid, document.visibilityState === "visible").catch(() => {});
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return () => {
       unsubs.forEach((fn) => fn());
+      window.clearInterval(heartbeat);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [user?.uid]);
 
@@ -174,6 +215,54 @@ export function App() {
     };
   }, [user?.uid, isAdmin]);
 
+  // Keep activeCall synced with live Firestore call_sessions updates
+  useEffect(() => {
+    if (!activeCall) return;
+    const updated = callSessions.find(
+      (s) => s.id === activeCall.id || s.roomCode === activeCall.roomCode
+    );
+    if (!updated) return;
+    if (updated.status === "ended") {
+      setActiveCall(null);
+      notify(`Call ${updated.roomCode} ended.`);
+      return;
+    }
+    setActiveCall(updated);
+  }, [callSessions, activeCall?.id, activeCall?.roomCode]);
+
+  const incomingCall = useMemo(() => {
+    if (!user || activeCall) return null;
+    const nowMs = Date.now();
+    return (
+      callSessions.find((s) => {
+        if (s.status !== "ringing") return false;
+        if (!s.hostId || s.hostId === user.uid) return false;
+        if (!s.participantIds.includes(user.uid)) return false;
+        if (dismissedCallIds.has(s.id) || dismissedCallIds.has(s.roomCode)) return false;
+        const refMs = toTimestampMillis(s.updatedAt) || toTimestampMillis(s.createdAt);
+        if (refMs > 0 && nowMs - refMs > CALL_RING_WINDOW_MS) return false;
+        return true;
+      }) || null
+    );
+  }, [user?.uid, activeCall, callSessions, dismissedCallIds]);
+
+  // Trigger incoming ringtone & outgoing ringback
+  useEffect(() => {
+    if (incomingCall) {
+      callAudio.startIncomingRingtone(incomingCall.roomCode || incomingCall.id);
+    } else {
+      callAudio.stopIncomingRingtone();
+    }
+  }, [incomingCall?.id, incomingCall?.roomCode]);
+
+  useEffect(() => {
+    if (user && activeCall && activeCall.status === "ringing" && activeCall.hostId === user.uid) {
+      callAudio.startOutgoingRingback(activeCall.roomCode || activeCall.id);
+    } else {
+      callAudio.stopOutgoingRingback();
+    }
+  }, [user?.uid, activeCall?.id, activeCall?.roomCode, activeCall?.status, activeCall?.hostId]);
+
   if (!authReady) {
     return (
       <div className="auth-page">
@@ -192,6 +281,9 @@ export function App() {
 
   const handleSignOut = async () => {
     if (!auth) return;
+    callAudio.stopIncomingRingtone();
+    callAudio.stopOutgoingRingback();
+    await updateUserActivity(user.uid, false).catch(() => {});
     await signOut(auth);
   };
 
@@ -200,6 +292,103 @@ export function App() {
     await installPromptEvent.prompt();
     await installPromptEvent.userChoice.catch(() => null);
     setInstallPromptEvent(null);
+  };
+
+  const handleStartCall = async (
+    callType: "audio" | "video" | "group",
+    targetCreator?: CreatorProfile | null
+  ) => {
+    void callAudio.unlock();
+    try {
+      const invitedIds = targetCreator ? [targetCreator.userId] : [];
+      const invitedNames = targetCreator ? [targetCreator.displayName] : [];
+      const session = await createCallSession(
+        user.uid,
+        resolvedName,
+        callType,
+        invitedIds,
+        invitedNames
+      );
+      setActiveCall(session);
+      setActiveTab("calls");
+
+      if (targetCreator) {
+        const existingThread = chats.find(
+          (t) =>
+            !t.isGroup &&
+            t.participantIds.length === 2 &&
+            t.participantIds.includes(user.uid) &&
+            t.participantIds.includes(targetCreator.userId)
+        );
+        const chatId =
+          existingThread?.id ||
+          (await createChatThread({
+            uid: user.uid,
+            creatorName: resolvedName,
+            title: targetCreator.displayName || `@${targetCreator.handle}`,
+            isGroup: false,
+            participantIds: [targetCreator.userId],
+            participantNames: [targetCreator.displayName]
+          }));
+        await sendMessage({
+          chatId,
+          uid: user.uid,
+          senderName: resolvedName,
+          participantIds: [user.uid, targetCreator.userId],
+          messageType: "call_event",
+          text: `Started ${callType.toUpperCase()} call · Room ${session.roomCode}`
+        }).catch(() => {});
+      }
+
+      notify(
+        targetCreator
+          ? `Ringing ${targetCreator.displayName} (${session.roomCode})...`
+          : `Call room ${session.roomCode} is live.`
+      );
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not start call.");
+    }
+  };
+
+  const handleAnswerCall = async (session: CallSession) => {
+    void callAudio.unlock();
+    callAudio.stopIncomingRingtone();
+    const code = session.roomCode || session.id;
+    setDismissedCallIds((prev) => {
+      const next = new Set(prev);
+      next.add(session.id);
+      next.add(code);
+      return next;
+    });
+    setActiveCall({ ...session, status: "active" });
+    setActiveTab("calls");
+    try {
+      const joined = await joinCallSession(code, user.uid, resolvedName);
+      setActiveCall(joined);
+    } catch (err) {
+      setActiveCall(null);
+      notify(err instanceof Error ? err.message : "Call is no longer active.");
+    }
+  };
+
+  const handleDeclineCall = async (session: CallSession) => {
+    callAudio.stopIncomingRingtone();
+    const code = session.roomCode || session.id;
+    setDismissedCallIds((prev) => {
+      const next = new Set(prev);
+      next.add(session.id);
+      next.add(code);
+      return next;
+    });
+    if (activeCall && (activeCall.id === session.id || activeCall.roomCode === code)) {
+      setActiveCall(null);
+    }
+    try {
+      await declineCallSession(code);
+      notify("Call declined.");
+    } catch (err) {
+      notify(err instanceof Error ? err.message : "Could not decline call.");
+    }
   };
 
   const navItems: { id: TabId; label: string; icon: typeof Film }[] = [
@@ -241,13 +430,13 @@ export function App() {
 
         <div className="sidebar-footer">
           <div className="mini-user">
-            <div className="avatar">
-              {user.photoURL ? (
-                <img src={user.photoURL} alt={resolvedName} />
-              ) : (
-                resolvedName.charAt(0).toUpperCase()
-              )}
-            </div>
+            <UserAvatar
+              displayName={resolvedName}
+              photoUrl={currentCreator?.photoUrl || account?.photoUrl || user.photoURL}
+              avatarBase64={currentCreator?.avatarBase64 || account?.avatarBase64}
+              isOnline={true}
+              size={38}
+            />
             <div style={{ minWidth: 0 }}>
               <div
                 style={{
@@ -335,6 +524,13 @@ export function App() {
               uid={user.uid}
               userName={resolvedName}
               sessions={callSessions}
+              creators={creators}
+              activeCall={activeCall}
+              onActiveCallChange={setActiveCall}
+              onStartCall={handleStartCall}
+              onAnswerCall={handleAnswerCall}
+              onDeclineCall={handleDeclineCall}
+              onOpenCreatorProfile={setSelectedCreatorProfile}
               onNotify={notify}
             />
           )}
@@ -392,6 +588,55 @@ export function App() {
           </button>
         ))}
       </nav>
+
+      {incomingCall && (
+        <IncomingCallModal
+          session={incomingCall}
+          callerProfile={creators.find((c) => c.userId === incomingCall.hostId) || null}
+          audioBlocked={audioBlocked}
+          onUnlockAudio={() => {
+            void callAudio.unlock().then((ok) => {
+              if (ok) {
+                const key = incomingCall.roomCode || incomingCall.id;
+                callAudio.stopIncomingRingtone();
+                callAudio.startIncomingRingtone(key);
+              }
+            });
+          }}
+          onAnswer={() => void handleAnswerCall(incomingCall)}
+          onDecline={() => void handleDeclineCall(incomingCall)}
+        />
+      )}
+
+      {selectedCreatorProfile && (
+        <CreatorProfileModal
+          creator={selectedCreatorProfile}
+          isCurrentUser={selectedCreatorProfile.userId === user.uid}
+          videos={publicVideos.filter((v) => v.authorId === selectedCreatorProfile.userId)}
+          onClose={() => setSelectedCreatorProfile(null)}
+          onMessage={() => {
+            setSelectedCreatorProfile(null);
+            setActiveTab("chats");
+          }}
+          onAudioCall={(creator) => {
+            setSelectedCreatorProfile(null);
+            void handleStartCall("audio", creator);
+          }}
+          onVideoCall={(creator) => {
+            setSelectedCreatorProfile(null);
+            void handleStartCall("video", creator);
+          }}
+          onWatchVideo={(video) => {
+            setSelectedCreatorProfile(null);
+            setSelectedVideo(video);
+            setActiveTab("feed");
+          }}
+          onEditOwnProfile={() => {
+            setSelectedCreatorProfile(null);
+            setActiveTab("profile");
+          }}
+        />
+      )}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

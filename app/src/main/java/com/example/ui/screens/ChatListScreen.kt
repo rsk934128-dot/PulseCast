@@ -1,43 +1,27 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AddComment
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.VideoCall
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -53,25 +37,31 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.recyclerview.widget.RecyclerView
 import com.example.R
 import com.example.data.ChatThread
 import com.example.data.CreatorProfile
 import com.example.data.isRecentlyOnline
 import com.example.ui.PulseCastViewModel
 import com.example.ui.UiState
-import com.example.ui.components.UserAvatarWithStatus
+import com.example.ui.adapters.ChatListRecyclerAdapter
+import com.example.ui.adapters.ChatListRowItem
+import com.example.ui.adapters.CreatorDirectoryRecyclerAdapter
+import com.example.ui.adapters.CreatorDirectoryUiItem
+import com.example.ui.adapters.PeopleStripUiItem
+import com.example.ui.adapters.SpacingItemDecoration
+import com.example.ui.adapters.configureOptimizedRecyclerView
+import com.example.ui.adapters.rememberRecyclerThemePalette
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -251,6 +241,12 @@ fun ChatListScreen(
                                 }
                             }
 
+                            val palette = rememberRecyclerThemePalette()
+                            val currentOnSelectChat by rememberUpdatedState(onSelectChat)
+                            val currentOnStartDirectChat by rememberUpdatedState(onStartDirectChat)
+                            val currentOnCallCreator by rememberUpdatedState(onCallCreator)
+                            val currentOnViewProfile by rememberUpdatedState(onViewProfile)
+
                             if (activeFilter == ChatListFilter.PEOPLE) {
                                 if (filteredCreators.isEmpty()) {
                                     FilteredEmptyState(
@@ -260,27 +256,67 @@ fun ChatListScreen(
                                         }
                                     )
                                 } else {
-                                    LazyColumn(
-                                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 88.dp),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .testTag("people_directory_list")
-                                    ) {
-                                        items(filteredCreators, key = { it.userId }) { creator ->
-                                            CreatorDirectoryRow(
+                                    val directoryItems = remember(filteredCreators, nowMillis) {
+                                        filteredCreators.map { creator ->
+                                            CreatorDirectoryUiItem(
                                                 creator = creator,
-                                                isOnline = creator.isRecentlyOnline(nowMillis),
-                                                onViewProfile = {
-                                                    if (onViewProfile != null) onViewProfile(creator)
-                                                    else onStartDirectChat(creator)
-                                                },
-                                                onChat = { onStartDirectChat(creator) },
-                                                onAudioCall = { onCallCreator(creator, "audio") },
-                                                onVideoCall = { onCallCreator(creator, "video") }
+                                                isOnline = creator.isRecentlyOnline(nowMillis)
                                             )
                                         }
                                     }
+                                    AndroidView(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .testTag("people_directory_list"),
+                                        factory = { ctx ->
+                                            RecyclerView(ctx).apply {
+                                                tag = "people_directory_list"
+                                                clipToPadding = false
+                                                configureOptimizedRecyclerView(
+                                                    recyclerView = this,
+                                                    orientation = RecyclerView.VERTICAL,
+                                                    viewCacheSize = 10,
+                                                    prefetchCount = 6
+                                                )
+                                                val density = ctx.resources.displayMetrics.density
+                                                addItemDecoration(
+                                                    SpacingItemDecoration(
+                                                        horizontalEdgePx = (16f * density).toInt(),
+                                                        topEdgePx = (4f * density).toInt(),
+                                                        bottomEdgePx = (88f * density).toInt(),
+                                                        itemGapPx = (10f * density).toInt(),
+                                                        orientation = RecyclerView.VERTICAL
+                                                    )
+                                                )
+                                                adapter = CreatorDirectoryRecyclerAdapter(
+                                                    palette = palette,
+                                                    onViewProfile = { creator ->
+                                                        val handler = currentOnViewProfile
+                                                        if (handler != null) handler(creator)
+                                                        else currentOnStartDirectChat(creator)
+                                                    },
+                                                    onChat = { currentOnStartDirectChat(it) },
+                                                    onAudioCall = { currentOnCallCreator(it, "audio") },
+                                                    onVideoCall = { currentOnCallCreator(it, "video") }
+                                                )
+                                            }
+                                        },
+                                        update = { rv ->
+                                            val adapter = rv.adapter as CreatorDirectoryRecyclerAdapter
+                                            adapter.updateEnvironment(
+                                                newPalette = palette,
+                                                onViewProfile = { creator ->
+                                                    val handler = currentOnViewProfile
+                                                    if (handler != null) handler(creator)
+                                                    else currentOnStartDirectChat(creator)
+                                                },
+                                                onChat = { currentOnStartDirectChat(it) },
+                                                onAudioCall = { currentOnCallCreator(it, "audio") },
+                                                onVideoCall = { currentOnCallCreator(it, "video") }
+                                            )
+                                            adapter.submitList(directoryItems)
+                                        }
+                                    )
                                 }
                             } else if (filteredThreads.isEmpty() && (otherCreators.isEmpty() || activeFilter != ChatListFilter.ALL)) {
                                 FilteredEmptyState(
@@ -290,52 +326,120 @@ fun ChatListScreen(
                                     }
                                 )
                             } else {
-                                LazyColumn(
-                                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 88.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .testTag("chat_list_lazy_column")
+                                val chatRowItems = remember(
+                                    activeFilter,
+                                    filteredCreators,
+                                    filteredThreads,
+                                    creatorsById,
+                                    currentUserId,
+                                    nowMillis
                                 ) {
-                                    if (activeFilter == ChatListFilter.ALL && filteredCreators.isNotEmpty()) {
-                                        item(key = "people_strip") {
-                                            PeopleStripSection(
-                                                creators = filteredCreators,
-                                                nowMillis = nowMillis,
-                                                onViewProfile = onViewProfile ?: onStartDirectChat,
-                                                onChat = onStartDirectChat,
-                                                onCall = onCallCreator
+                                    buildList {
+                                        if (activeFilter == ChatListFilter.ALL && filteredCreators.isNotEmpty()) {
+                                            add(
+                                                ChatListRowItem.PeopleStripItem(
+                                                    creators = filteredCreators.map { creator ->
+                                                        PeopleStripUiItem(
+                                                            creator = creator,
+                                                            isOnline = creator.isRecentlyOnline(nowMillis)
+                                                        )
+                                                    }
+                                                )
                                             )
                                         }
-                                    }
-                                    items(filteredThreads, key = { it.id }) { thread ->
-                                        val peerProfile = remember(thread, currentUserId, creatorsById) {
-                                            if (thread.isGroup) null
-                                            else thread.participantIds.firstOrNull { it != currentUserId }?.let { creatorsById[it] }
-                                        }
-                                        val isThreadOnline = remember(thread, currentUserId, creatorsById, nowMillis) {
+                                        filteredThreads.forEach { thread ->
+                                            val peerProfile = if (thread.isGroup) {
+                                                null
+                                            } else {
+                                                thread.participantIds.firstOrNull { it != currentUserId }
+                                                    ?.let { creatorsById[it] }
+                                            }
                                             val peerIds = thread.participantIds.filter { it != currentUserId }
-                                            if (peerIds.isNotEmpty()) {
+                                            val isThreadOnline = if (peerIds.isNotEmpty()) {
                                                 peerIds.any { uid -> creatorsById[uid]?.isRecentlyOnline(nowMillis) == true }
                                             } else {
                                                 creatorsById[currentUserId]?.isRecentlyOnline(nowMillis) == true
                                             }
-                                        }
-                                        ChatConversationRow(
-                                            thread = thread,
-                                            currentUserId = currentUserId,
-                                            isOnline = isThreadOnline,
-                                            peerPhotoUrl = peerProfile?.photoUrl,
-                                            peerAvatarBase64 = peerProfile?.avatarBase64,
-                                            onAvatarClick = if (peerProfile != null && onViewProfile != null) {
-                                                { onViewProfile(peerProfile) }
+                                            val timeLabel = formatChatTimestamp(
+                                                timestamp = thread.lastMessageAt ?: thread.createdAt,
+                                                nowMillis = nowMillis
+                                            )
+                                            val previewPrefix = if (
+                                                thread.lastMessageSenderId == currentUserId &&
+                                                thread.lastMessageText.isNotBlank()
+                                            ) {
+                                                "You: "
                                             } else {
-                                                null
-                                            },
-                                            onClick = { onSelectChat(thread) }
-                                        )
+                                                ""
+                                            }
+                                            val previewText = "$previewPrefix${thread.lastMessageText.ifBlank { "No messages yet" }}"
+                                            add(
+                                                ChatListRowItem.ThreadRowItem(
+                                                    thread = thread,
+                                                    isOnline = isThreadOnline,
+                                                    peerPhotoUrl = peerProfile?.photoUrl,
+                                                    peerAvatarBase64 = peerProfile?.avatarBase64,
+                                                    peerProfile = peerProfile,
+                                                    timeLabel = timeLabel,
+                                                    previewText = previewText
+                                                )
+                                            )
+                                        }
                                     }
                                 }
+                                AndroidView(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .testTag("chat_list_lazy_column"),
+                                    factory = { ctx ->
+                                        RecyclerView(ctx).apply {
+                                            tag = "chat_list_lazy_column"
+                                            clipToPadding = false
+                                            configureOptimizedRecyclerView(
+                                                recyclerView = this,
+                                                orientation = RecyclerView.VERTICAL,
+                                                viewCacheSize = 10,
+                                                prefetchCount = 6
+                                            )
+                                            val density = ctx.resources.displayMetrics.density
+                                            addItemDecoration(
+                                                SpacingItemDecoration(
+                                                    horizontalEdgePx = (16f * density).toInt(),
+                                                    topEdgePx = (4f * density).toInt(),
+                                                    bottomEdgePx = (88f * density).toInt(),
+                                                    itemGapPx = (10f * density).toInt(),
+                                                    orientation = RecyclerView.VERTICAL
+                                                )
+                                            )
+                                            adapter = ChatListRecyclerAdapter(
+                                                palette = palette,
+                                                onSelectChat = { currentOnSelectChat(it) },
+                                                onViewProfile = { creator ->
+                                                    val handler = currentOnViewProfile
+                                                    if (handler != null) handler(creator)
+                                                    else currentOnStartDirectChat(creator)
+                                                },
+                                                onChatWithCreator = { currentOnStartDirectChat(it) },
+                                                onCallCreator = { creator, type -> currentOnCallCreator(creator, type) }
+                                            )
+                                        }
+                                    },
+                                    update = { rv ->
+                                        val adapter = rv.adapter as ChatListRecyclerAdapter
+                                        adapter.updateEnvironment(
+                                            newPalette = palette,
+                                            onSelectChat = { currentOnSelectChat(it) },
+                                            onViewProfile = { creator ->
+                                                val handler = currentOnViewProfile
+                                                if (handler != null) handler(creator)
+                                                else currentOnStartDirectChat(creator)
+                                            },
+                                            onChatWithCreator = { currentOnStartDirectChat(it) },
+                                            onCallCreator = { creator, type -> currentOnCallCreator(creator, type) }
+                                        )
+                                        adapter.submitList(chatRowItems)
+                                    }
+                                )
                             }
                         }
                     }
@@ -400,141 +504,6 @@ private fun ChatSearchAndFilterBar(
     }
 }
 
-@Composable
-private fun ChatConversationRow(
-    thread: ChatThread,
-    currentUserId: String,
-    isOnline: Boolean,
-    peerPhotoUrl: String? = null,
-    peerAvatarBase64: String? = null,
-    onAvatarClick: (() -> Unit)? = null,
-    onClick: () -> Unit
-) {
-    val timeLabel = remember(thread.lastMessageAt, thread.createdAt) {
-        formatChatTimestamp(thread.lastMessageAt ?: thread.createdAt)
-    }
-    val previewPrefix = if (thread.lastMessageSenderId == currentUserId && thread.lastMessageText.isNotBlank()) {
-        "You: "
-    } else {
-        ""
-    }
-    val previewText = "$previewPrefix${thread.lastMessageText.ifBlank { "No messages yet" }}"
-    val previewIcon = remember(thread.lastMessageText) {
-        when {
-            thread.lastMessageText.startsWith("Photo:") -> Icons.Filled.Image
-            thread.lastMessageText.startsWith("Voice note") -> Icons.Filled.Mic
-            thread.lastMessageText.startsWith("Started ") -> Icons.Filled.VideoCall
-            else -> null
-        }
-    }
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .testTag("chat_thread_${thread.id}"),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            UserAvatarWithStatus(
-                displayName = thread.title,
-                isOnline = isOnline,
-                avatarSize = 50.dp,
-                isGroup = thread.isGroup,
-                photoUrl = peerPhotoUrl,
-                avatarBase64 = peerAvatarBase64,
-                onClick = onAvatarClick,
-                indicatorTestTag = "chat_thread_online_indicator_${thread.id}"
-            )
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = thread.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (timeLabel.isNotEmpty()) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = timeLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    if (previewIcon != null) {
-                        Icon(
-                            imageVector = previewIcon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                    Text(
-                        text = previewText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
-                        shape = RoundedCornerShape(50)
-                    ) {
-                        Text(
-                            text = if (thread.isGroup) "Group · ${thread.participantIds.size}" else "Direct · ${thread.participantIds.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
-                    val peersLabel = thread.participantNames
-                        ?.filter { it.isNotBlank() }
-                        ?.joinToString(", ")
-                    if (!peersLabel.isNullOrBlank()) {
-                        Text(
-                            text = peersLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun EmptyConversationsState(onNewChatClick: () -> Unit) {
@@ -595,196 +564,6 @@ private fun FilteredEmptyState(onClearFilters: () -> Unit) {
     }
 }
 
-@Composable
-private fun PeopleStripSection(
-    creators: List<CreatorProfile>,
-    nowMillis: Long,
-    onViewProfile: (CreatorProfile) -> Unit,
-    onChat: (CreatorProfile) -> Unit,
-    onCall: (CreatorProfile, String) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 6.dp)
-            .testTag("people_strip_section"),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "People on PulseCast (${creators.size})",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = "Tap profile to view",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(vertical = 2.dp)
-        ) {
-            items(creators, key = { it.userId }) { creator ->
-                val creatorOnline = creator.isRecentlyOnline(nowMillis)
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier
-                        .width(224.dp)
-                        .clickable { onViewProfile(creator) }
-                        .testTag("people_strip_card_${creator.userId}")
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            UserAvatarWithStatus(
-                                displayName = creator.displayName,
-                                isOnline = creatorOnline,
-                                avatarSize = 40.dp,
-                                photoUrl = creator.photoUrl,
-                                avatarBase64 = creator.avatarBase64,
-                                indicatorTestTag = "people_strip_online_indicator_${creator.userId}"
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = creator.displayName,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "@${creator.handle} · ${if (creatorOnline) "Online" else "Offline"}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (creatorOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedButton(
-                                onClick = { onChat(creator) },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 48.dp)
-                                    .testTag("quick_chat_${creator.userId}")
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Message", modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Chat", style = MaterialTheme.typography.labelSmall)
-                            }
-                            FilledTonalIconButton(
-                                onClick = { onCall(creator, "audio") },
-                                modifier = Modifier.size(48.dp).testTag("quick_audio_${creator.userId}")
-                            ) {
-                                Icon(Icons.Filled.Call, contentDescription = "Audio call ${creator.displayName}", modifier = Modifier.size(18.dp))
-                            }
-                            FilledTonalIconButton(
-                                onClick = { onCall(creator, "video") },
-                                modifier = Modifier.size(48.dp).testTag("quick_video_${creator.userId}")
-                            ) {
-                                Icon(Icons.Filled.VideoCall, contentDescription = "Video call ${creator.displayName}", modifier = Modifier.size(18.dp))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CreatorDirectoryRow(
-    creator: CreatorProfile,
-    isOnline: Boolean,
-    onViewProfile: () -> Unit,
-    onChat: () -> Unit,
-    onAudioCall: () -> Unit,
-    onVideoCall: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f),
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onViewProfile)
-            .testTag("creator_directory_row_${creator.userId}")
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            UserAvatarWithStatus(
-                displayName = creator.displayName,
-                isOnline = isOnline,
-                avatarSize = 46.dp,
-                photoUrl = creator.photoUrl,
-                avatarBase64 = creator.avatarBase64,
-                indicatorTestTag = "directory_online_indicator_${creator.userId}"
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = creator.displayName,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = "@${creator.handle} · ${if (isOnline) "Online" else "Offline"}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (isOnline) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val bioText = creator.bio?.trim().orEmpty()
-                if (bioText.isNotEmpty()) {
-                    Text(
-                        text = bioText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            FilledTonalIconButton(
-                onClick = onChat,
-                modifier = Modifier.size(48.dp).testTag("directory_chat_${creator.userId}")
-            ) {
-                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Message ${creator.displayName}", modifier = Modifier.size(18.dp))
-            }
-            FilledTonalIconButton(
-                onClick = onAudioCall,
-                modifier = Modifier.size(48.dp).testTag("directory_audio_${creator.userId}")
-            ) {
-                Icon(Icons.Filled.Call, contentDescription = "Audio call ${creator.displayName}", modifier = Modifier.size(18.dp))
-            }
-            FilledTonalIconButton(
-                onClick = onVideoCall,
-                modifier = Modifier.size(48.dp).testTag("directory_video_${creator.userId}")
-            ) {
-                Icon(Icons.Filled.VideoCall, contentDescription = "Video call ${creator.displayName}", modifier = Modifier.size(18.dp))
-            }
-        }
-    }
-}
 
 internal fun formatChatTimestamp(
     timestamp: Timestamp?,

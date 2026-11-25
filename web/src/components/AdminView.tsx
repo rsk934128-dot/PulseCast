@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
+  BarChart3,
   Eye,
   EyeOff,
   Film,
@@ -11,6 +12,16 @@ import {
   Users,
   X
 } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import {
   adminDeleteCallSession,
   adminGrantRole,
@@ -30,6 +41,105 @@ import type {
 } from "../types";
 
 type AdminSection = "videos" | "creators" | "calls" | "access";
+
+interface DailyActivityPoint {
+  dateKey: string;
+  label: string;
+  fullDate: string;
+  videos: number;
+  calls: number;
+}
+
+function toDateSafe(ts: unknown): Date | null {
+  if (!ts) return null;
+  if (ts instanceof Date) return Number.isNaN(ts.getTime()) ? null : ts;
+  if (typeof ts === "object" && ts !== null) {
+    const maybeTs = ts as { toDate?: () => Date; toMillis?: () => number; seconds?: number };
+    if (typeof maybeTs.toDate === "function") {
+      const d = maybeTs.toDate();
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof maybeTs.toMillis === "function") {
+      const d = new Date(maybeTs.toMillis());
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof maybeTs.seconds === "number") {
+      const d = new Date(maybeTs.seconds * 1000);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+  }
+  if (typeof ts === "number" || typeof ts === "string") {
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+function toLocalDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+interface ActivityTooltipProps {
+  active?: boolean;
+  payload?: Array<{
+    name?: string;
+    value?: number;
+    color?: string;
+    payload?: DailyActivityPoint;
+  }>;
+  label?: string;
+}
+
+function ActivityTooltip({ active, payload, label }: ActivityTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null;
+  const fullDate = payload[0]?.payload?.fullDate || label;
+  return (
+    <div
+      style={{
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border-accent)",
+        borderRadius: 12,
+        padding: "10px 14px",
+        boxShadow: "var(--shadow-lg)",
+        fontSize: "0.82rem"
+      }}
+    >
+      <div style={{ fontWeight: 700, color: "var(--text-primary)", marginBottom: 6 }}>
+        {fullDate}
+      </div>
+      {payload.map((entry) => (
+        <div
+          key={entry.name}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            color: "var(--text-secondary)",
+            marginTop: 2
+          }}
+        >
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: 999,
+                background: entry.color || "var(--accent-cyan)",
+                display: "inline-block"
+              }}
+            />
+            {entry.name}
+          </span>
+          <strong style={{ color: "var(--text-primary)" }}>{entry.value ?? 0}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 interface AdminViewProps {
   currentUserId: string;
@@ -64,6 +174,62 @@ export function AdminView({
   const q = search.trim().toLowerCase();
   const activeCallCount = calls.filter((c) => c.status !== "ended").length;
   const adminUidSet = new Set(admins.map((a) => a.userId));
+
+  const activitySummary = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const days: DailyActivityPoint[] = [];
+    const byKey = new Map<string, DailyActivityPoint>();
+
+    for (let offset = 29; offset >= 0; offset -= 1) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - offset);
+      const dateKey = toLocalDateKey(d);
+      const point: DailyActivityPoint = {
+        dateKey,
+        label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+        fullDate: d.toLocaleDateString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          year: "numeric"
+        }),
+        videos: 0,
+        calls: 0
+      };
+      days.push(point);
+      byKey.set(dateKey, point);
+    }
+
+    let totalVideos30d = 0;
+    for (const video of videos) {
+      const created = toDateSafe(video.createdAt);
+      if (!created) continue;
+      const point = byKey.get(toLocalDateKey(created));
+      if (point) {
+        point.videos += 1;
+        totalVideos30d += 1;
+      }
+    }
+
+    let totalCalls30d = 0;
+    for (const call of calls) {
+      const created = toDateSafe(call.createdAt);
+      if (!created) continue;
+      const point = byKey.get(toLocalDateKey(created));
+      if (point) {
+        point.calls += 1;
+        totalCalls30d += 1;
+      }
+    }
+
+    return {
+      data: days,
+      totalVideos30d,
+      totalCalls30d
+    };
+  }, [videos, calls]);
 
   const filteredVideos = videos.filter((v) =>
     !q ||
@@ -162,6 +328,80 @@ export function AdminView({
             <div className="stat-value">{Math.max(1, admins.length)}</div>
             <div className="stat-label">Admins</div>
           </div>
+        </div>
+      </section>
+
+      <section className="card" style={{ marginBottom: 22 }} aria-label="30-day upload and call activity">
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            marginBottom: 16
+          }}
+        >
+          <div>
+            <h2 style={{ fontSize: "1.1rem", display: "flex", alignItems: "center", gap: 8 }}>
+              <BarChart3 size={18} style={{ color: "var(--accent-cyan)" }} />
+              30-Day Platform Activity
+            </h2>
+            <p style={{ margin: "4px 0 0", fontSize: "0.84rem", color: "var(--text-secondary)" }}>
+              Daily video uploads and call sessions over the last 30 days
+            </p>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <span className="badge">{activitySummary.totalVideos30d} uploads (30d)</span>
+            <span className="badge violet">{activitySummary.totalCalls30d} calls (30d)</span>
+          </div>
+        </div>
+
+        <div style={{ width: "100%", height: 280 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={activitySummary.data}
+              margin={{ top: 8, right: 12, left: -16, bottom: 0 }}
+            >
+              <CartesianGrid stroke="rgba(148, 163, 184, 0.12)" strokeDasharray="3 3" vertical={false} />
+              <XAxis
+                dataKey="label"
+                stroke="#94a3b8"
+                tick={{ fill: "#94a3b8", fontSize: 11 }}
+                tickLine={false}
+                axisLine={{ stroke: "rgba(148, 163, 184, 0.18)" }}
+                minTickGap={22}
+              />
+              <YAxis
+                allowDecimals={false}
+                stroke="#94a3b8"
+                tick={{ fill: "#94a3b8", fontSize: 11 }}
+                tickLine={false}
+                axisLine={false}
+              />
+              <Tooltip
+                cursor={{ fill: "rgba(148, 163, 184, 0.08)" }}
+                content={<ActivityTooltip />}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: "0.82rem", color: "#94a3b8", paddingTop: 8 }}
+              />
+              <Bar
+                dataKey="videos"
+                name="Video Uploads"
+                fill="#22d3ee"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={18}
+              />
+              <Bar
+                dataKey="calls"
+                name="Call Sessions"
+                fill="#8b5cf6"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={18}
+              />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </section>
 

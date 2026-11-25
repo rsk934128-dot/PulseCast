@@ -1,14 +1,12 @@
 package com.example.ui.screens
 
+import android.view.View
 import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import com.example.data.ChatThread
 import com.example.data.CreatorProfile
@@ -122,24 +120,26 @@ class ChatListScreenTest {
                 )
             }
         }
+        settleRecyclerUi(composeRule)
 
-        composeRule.onNodeWithTag("chat_thread_chat_1").assertIsDisplayed()
-        composeRule.onNodeWithText("You: Sound check at 8pm").assertIsDisplayed()
-        composeRule.onNodeWithTag("chat_thread_chat_2").assertIsDisplayed()
-        composeRule.onNodeWithText("Voice note (14s)").assertIsDisplayed()
+        waitForViewByTag<View>(composeRule, "chat_thread_chat_1")
+        waitUntilTextVisibleInRecycler(composeRule, "chat_list_lazy_column", "You: Sound check at 8pm")
+        waitForViewByTag<View>(composeRule, "chat_thread_chat_2")
+        waitUntilTextVisibleInRecycler(composeRule, "chat_list_lazy_column", "Voice note (14s)")
 
         // Filter to Direct only
         composeRule.onNodeWithTag("chat_filter_direct").performClick()
-        composeRule.onNodeWithTag("chat_thread_chat_1").assertDoesNotExist()
-        composeRule.onNodeWithTag("chat_thread_chat_2").assertIsDisplayed()
+        waitUntilViewAbsentOrHidden(composeRule, "chat_thread_chat_1")
+        waitForViewByTag<View>(composeRule, "chat_thread_chat_2")
 
         // Reset to All and search by message snippet
         composeRule.onNodeWithTag("chat_filter_all").performClick()
         composeRule.onNodeWithTag("chat_search_input").performTextInput("Sound check")
-        composeRule.onNodeWithTag("chat_thread_chat_1").assertIsDisplayed()
-        composeRule.onNodeWithTag("chat_thread_chat_2").assertDoesNotExist()
+        val chat1Row = waitForViewByTag<View>(composeRule, "chat_thread_chat_1")
+        waitUntilViewAbsentOrHidden(composeRule, "chat_thread_chat_2")
 
-        composeRule.onNodeWithTag("chat_thread_chat_1").performClick()
+        composeRule.runOnUiThread { chat1Row.performClick() }
+        settleRecyclerUi(composeRule)
         assertEquals("chat_1", selectedThreadId)
     }
 
@@ -166,14 +166,20 @@ class ChatListScreenTest {
                 )
             }
         }
+        settleRecyclerUi(composeRule)
 
-        composeRule.onNodeWithTag("people_strip_card_uid_bob").assertIsDisplayed()
-        composeRule.onNodeWithTag("quick_chat_uid_bob").performClick()
+        waitForViewByTag<View>(composeRule, "people_strip_card_uid_bob")
+        val quickChatBtn = waitForViewByTag<View>(composeRule, "quick_chat_uid_bob")
+        composeRule.runOnUiThread { quickChatBtn.performClick() }
+        settleRecyclerUi(composeRule)
         assertEquals("uid_bob", chattedWithId)
 
         composeRule.onNodeWithTag("chat_filter_people").performClick()
-        composeRule.onNodeWithTag("creator_directory_row_uid_carol").assertIsDisplayed()
-        composeRule.onNodeWithTag("directory_video_uid_carol").performClick()
+        settleRecyclerUi(composeRule)
+        waitForViewByTag<View>(composeRule, "creator_directory_row_uid_carol")
+        val dirVideoBtn = waitForViewByTag<View>(composeRule, "directory_video_uid_carol")
+        composeRule.runOnUiThread { dirVideoBtn.performClick() }
+        settleRecyclerUi(composeRule)
         assertEquals("uid_carol" to "video", calledPeer)
     }
 
@@ -228,26 +234,23 @@ class ChatListScreenTest {
                 )
             }
         }
-        composeRule.waitForIdle()
+        settleRecyclerUi(composeRule)
 
-        composeRule.onNodeWithTag("people_strip_online_indicator_uid_bob", useUnmergedTree = true)
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Bob Rivera is online")
-        composeRule.onNodeWithText("@bob_r · Online").assertIsDisplayed()
-        composeRule.onNodeWithTag("chat_thread_online_indicator_chat_dm_bob", useUnmergedTree = true)
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Bob Rivera is online")
+        val stripDotBob = waitForViewByTag<View>(composeRule, "people_strip_online_indicator_uid_bob")
+        assertEquals("Bob Rivera is online", stripDotBob.contentDescription?.toString())
+        waitUntilTextVisibleInRecycler(composeRule, "chat_list_lazy_column", "@bob_r · Online")
 
-        composeRule.onNodeWithTag("chat_list_lazy_column")
-            .performScrollToNode(hasTestTag("chat_thread_chat_dm_carol"))
-        composeRule.onNodeWithTag("chat_thread_online_indicator_chat_dm_carol", useUnmergedTree = true)
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Carol Chen is offline")
+        val threadDotBob = waitForViewByTag<View>(composeRule, "chat_thread_online_indicator_chat_dm_bob")
+        assertEquals("Bob Rivera is online", threadDotBob.contentDescription?.toString())
+
+        scrollRecyclerToViewTag(composeRule, "chat_list_lazy_column", "chat_thread_chat_dm_carol")
+        val threadDotCarol = waitForViewByTag<View>(composeRule, "chat_thread_online_indicator_chat_dm_carol")
+        assertEquals("Carol Chen is offline", threadDotCarol.contentDescription?.toString())
 
         composeRule.onNodeWithTag("chat_filter_people").performClick()
-        composeRule.onNodeWithTag("directory_online_indicator_uid_carol", useUnmergedTree = true)
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Carol Chen is offline")
-        composeRule.onNodeWithText("@carol · Offline").assertIsDisplayed()
+        settleRecyclerUi(composeRule)
+        val dirDotCarol = waitForViewByTag<View>(composeRule, "directory_online_indicator_uid_carol")
+        assertEquals("Carol Chen is offline", dirDotCarol.contentDescription?.toString())
+        waitUntilTextVisibleInRecycler(composeRule, "people_directory_list", "@carol · Offline")
     }
 }

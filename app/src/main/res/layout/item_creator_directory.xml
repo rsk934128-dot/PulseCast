@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/creatorDirectoryRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="14dp">
+
+    <include
+        android:id="@+id/creatorDirectoryAvatar"
+        layout="@layout/view_user_avatar"
+        android:layout_width="46dp"
+        android:layout_height="46dp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/creatorDirectoryName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/plus_jakarta_sans"
+            android:maxLines="1"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/creatorDirectoryHandleStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/jetbrains_mono"
+            android:maxLines="1"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/creatorDirectoryBio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/plus_jakarta_sans"
+            android:maxLines="1"
+            android:textSize="12sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/creatorDirectoryChatButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="8dp"
+        android:background="@android:color/transparent"
+        android:padding="15dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_vec_chat" />
+
+    <ImageButton
+        android:id="@+id/creatorDirectoryAudioButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="6dp"
+        android:background="@android:color/transparent"
+        android:padding="15dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_vec_call" />
+
+    <ImageButton
+        android:id="@+id/creatorDirectoryVideoButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginStart="6dp"
+        android:background="@android:color/transparent"
+        android:padding="15dp"
+        android:scaleType="centerInside"
+        android:src="@drawable/ic_vec_video_call" />
+
+</LinearLayout>

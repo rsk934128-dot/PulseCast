@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/avatarRoot"
+    android:layout_width="44dp"
+    android:layout_height="44dp">
+
+    <FrameLayout
+        android:id="@+id/avatarCircle"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipToOutline="true">
+
+        <TextView
+            android:id="@+id/avatarInitial"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:fontFamily="@font/plus_jakarta_sans"
+            android:includeFontPadding="false"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/avatarImage"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/avatarGroupIcon"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_gravity="center"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_vec_group"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <View
+        android:id="@+id/avatarOnlineDot"
+        android:layout_width="13dp"
+        android:layout_height="13dp"
+        android:layout_gravity="bottom|end" />
+
+</FrameLayout>

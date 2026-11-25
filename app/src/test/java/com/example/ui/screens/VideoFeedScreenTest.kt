@@ -1,18 +1,16 @@
 package com.example.ui.screens
 
+import android.view.View
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollToNode
 import com.example.data.CreatorProfile
 import com.example.data.PublishedVideo
 import com.example.ui.UiState
@@ -94,48 +92,53 @@ class VideoFeedScreenTest {
                 )
             }
         }
+        settleRecyclerUi(composeRule)
 
-        // Initial state for unliked vid_1 and liked vid_2
-        composeRule.onNodeWithTag("feed_like_button_vid_1")
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Like Acoustic Session")
-        composeRule.onNodeWithTag("feed_like_count_vid_1", useUnmergedTree = true)
-            .assertTextEquals("3")
+        // Initial state for unliked vid_1
+        val likeBtn1 = waitForViewByTag<View>(composeRule, "feed_like_button_vid_1")
+        assertEquals("Like Acoustic Session", likeBtn1.contentDescription?.toString())
+        val likeCount1 = waitForViewByTag<TextView>(composeRule, "feed_like_count_vid_1")
+        assertEquals("3", likeCount1.text.toString())
 
         // Tap like on vid_1: increments count and updates state without opening video detail
-        composeRule.onNodeWithTag("feed_like_button_vid_1").performClick()
+        composeRule.runOnUiThread { likeBtn1.performClick() }
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            settleRecyclerUi(composeRule)
+            waitForViewByTag<TextView>(composeRule, "feed_like_count_vid_1").text.toString() == "4"
+        }
         assertEquals(listOf("vid_1"), toggleCalls)
         assertNull(openedVideoId)
-        composeRule.onNodeWithTag("feed_like_button_vid_1")
-            .assertContentDescriptionEquals("Unlike Acoustic Session")
-        composeRule.onNodeWithTag("feed_like_count_vid_1", useUnmergedTree = true)
-            .assertTextEquals("4")
+        assertEquals("Unlike Acoustic Session", likeBtn1.contentDescription?.toString())
+        assertEquals("4", likeCount1.text.toString())
 
         // Simulate external real-time Firestore snapshot update from another user
         val updatedList = (videosState as UiState.Success).data.map { item ->
             if (item.id == "vid_1") item.copy(likesCount = 5L) else item
         }
         videosState = UiState.Success(updatedList)
-        composeRule.onNodeWithTag("feed_like_count_vid_1", useUnmergedTree = true)
-            .assertTextEquals("5")
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            settleRecyclerUi(composeRule)
+            waitForViewByTag<TextView>(composeRule, "feed_like_count_vid_1").text.toString() == "5"
+        }
+        assertEquals("5", likeCount1.text.toString())
 
         // Scroll to vid_2 before asserting & clicking unlike
-        composeRule.onNodeWithTag("feed_video_list")
-            .performScrollToNode(hasTestTag("video_card_vid_2"))
-        composeRule.onNodeWithTag("feed_like_button_vid_2")
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Unlike Podcast Gear Tour")
-        composeRule.onNodeWithTag("feed_like_count_vid_2", useUnmergedTree = true)
-            .assertTextEquals("10")
+        scrollRecyclerToViewTag(composeRule, "feed_video_list", "video_card_vid_2")
+        val likeBtn2 = waitForViewByTag<View>(composeRule, "feed_like_button_vid_2")
+        assertEquals("Unlike Podcast Gear Tour", likeBtn2.contentDescription?.toString())
+        val likeCount2 = waitForViewByTag<TextView>(composeRule, "feed_like_count_vid_2")
+        assertEquals("10", likeCount2.text.toString())
 
         // Tap unlike on vid_2: decrements count
-        composeRule.onNodeWithTag("feed_like_button_vid_2").performClick()
+        composeRule.runOnUiThread { likeBtn2.performClick() }
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            settleRecyclerUi(composeRule)
+            waitForViewByTag<TextView>(composeRule, "feed_like_count_vid_2").text.toString() == "9"
+        }
         assertEquals(listOf("vid_1", "vid_2"), toggleCalls)
         assertNull(openedVideoId)
-        composeRule.onNodeWithTag("feed_like_button_vid_2")
-            .assertContentDescriptionEquals("Like Podcast Gear Tour")
-        composeRule.onNodeWithTag("feed_like_count_vid_2", useUnmergedTree = true)
-            .assertTextEquals("9")
+        assertEquals("Like Podcast Gear Tour", likeBtn2.contentDescription?.toString())
+        assertEquals("9", likeCount2.text.toString())
     }
 
     @Test
@@ -210,17 +213,21 @@ class VideoFeedScreenTest {
                 )
             }
         }
+        settleRecyclerUi(composeRule)
 
         val clipboard = composeRule.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
             as android.content.ClipboardManager
 
-        composeRule.onNodeWithTag("feed_share_button_vid_1")
-            .assertIsDisplayed()
-            .assertContentDescriptionEquals("Copy direct link for Acoustic Session")
-        composeRule.onNodeWithTag("feed_share_label_vid_1", useUnmergedTree = true)
-            .assertTextEquals("Share")
+        val shareBtn1 = waitForViewByTag<View>(composeRule, "feed_share_button_vid_1")
+        assertEquals("Copy direct link for Acoustic Session", shareBtn1.contentDescription?.toString())
+        val shareLabel1 = waitForViewByTag<TextView>(composeRule, "feed_share_label_vid_1")
+        assertEquals("Share", shareLabel1.text.toString())
 
-        composeRule.onNodeWithTag("feed_share_button_vid_1").performClick()
+        composeRule.runOnUiThread { shareBtn1.performClick() }
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            settleRecyclerUi(composeRule)
+            waitForViewByTag<TextView>(composeRule, "feed_share_label_vid_1").text.toString() == "Copied"
+        }
 
         assertEquals(listOf("vid_1"), sharedVideoIds)
         assertNull(openedVideoId)
@@ -228,12 +235,12 @@ class VideoFeedScreenTest {
             directStreamUrl,
             clipboard.primaryClip?.getItemAt(0)?.text?.toString()
         )
-        composeRule.onNodeWithTag("feed_share_label_vid_1", useUnmergedTree = true)
-            .assertTextEquals("Copied")
+        assertEquals("Copied", shareLabel1.text.toString())
 
-        composeRule.onNodeWithTag("feed_video_list")
-            .performScrollToNode(hasTestTag("video_card_vid_2"))
-        composeRule.onNodeWithTag("feed_share_button_vid_2").assertIsDisplayed().performClick()
+        scrollRecyclerToViewTag(composeRule, "feed_video_list", "video_card_vid_2")
+        val shareBtn2 = waitForViewByTag<View>(composeRule, "feed_share_button_vid_2")
+        composeRule.runOnUiThread { shareBtn2.performClick() }
+        settleRecyclerUi(composeRule)
 
         assertEquals(listOf("vid_1", "vid_2"), sharedVideoIds)
         assertNull(openedVideoId)

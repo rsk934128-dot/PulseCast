@@ -62,8 +62,11 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,23 +86,32 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.recyclerview.widget.RecyclerView
 import com.example.R
 import com.example.data.PublishedVideo
 import com.example.data.VideoComment
+import com.example.data.resolveIsUserOnline
+import com.example.data.resolveVideoShareUrl
 import com.example.media.FirebaseStorageVideoUploader
 import com.example.media.FirestoreVideoMediaStore
 import com.example.media.PulseCastVideoPlayer
 import com.example.media.decodeBase64ToBitmap
 import com.example.media.formatDuration
-import com.example.data.resolveVideoShareUrl
 import com.example.ui.PulseCastViewModel
 import com.example.ui.UiState
 import com.example.ui.VideoPlaybackSourceState
 import com.example.ui.VideoUploadUiState
+import com.example.ui.adapters.SpacingItemDecoration
+import com.example.ui.adapters.VideoFeedRecyclerAdapter
+import com.example.ui.adapters.VideoFeedUiItem
+import com.example.ui.adapters.configureOptimizedRecyclerView
+import com.example.ui.adapters.rememberRecyclerThemePalette
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val VIDEO_CATEGORIES = listOf("All", "Tech", "Studio", "Podcast", "Music", "Vlog", "Live")
 
@@ -311,24 +323,102 @@ internal fun VideoFeedContent(
                     if (filtered.isEmpty()) {
                         EmptyVideoFeedState(onPublishClick = onPublishClick)
                     } else {
-                        LazyColumn(
-                            modifier = Modifier.testTag("feed_video_list"),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 88.dp, top = 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        val context = LocalContext.current
+                        val coroutineScope = rememberCoroutineScope()
+                        val copiedTokens = remember { mutableStateMapOf<String, Long>() }
+                        val palette = rememberRecyclerThemePalette()
+                        val currentOnAuthorClick by rememberUpdatedState(onAuthorClick)
+                        val currentOnToggleLike by rememberUpdatedState(onToggleLike)
+                        val currentOnShareClick by rememberUpdatedState(onShareClick)
+                        val currentOnVideoClick by rememberUpdatedState(onVideoClick)
+
+                        val feedItems = remember(
+                            filtered,
+                            creatorsById,
+                            likedVideoIds,
+                            likingVideoIds,
+                            copiedTokens.toMap()
                         ) {
-                            items(filtered, key = { it.id }) { video ->
-                                VideoFeedCard(
+                            filtered.map { video ->
+                                val authorProfile = creatorsById[video.authorId]
+                                val isAuthorOnline = authorProfile?.let {
+                                    resolveIsUserOnline(
+                                        isOnlineFlag = it.isOnline,
+                                        lastActiveAt = it.lastActiveAt,
+                                        updatedAt = it.updatedAt
+                                    )
+                                } == true
+                                VideoFeedUiItem(
                                     video = video,
-                                    authorProfile = creatorsById[video.authorId],
+                                    authorProfile = authorProfile,
+                                    isAuthorOnline = isAuthorOnline,
                                     isLiked = video.id in likedVideoIds,
                                     isLikeUpdating = video.id in likingVideoIds,
-                                    onAuthorClick = { onAuthorClick(video) },
-                                    onToggleLike = { onToggleLike(video) },
-                                    onShareClick = { onShareClick(video) },
-                                    onClick = { onVideoClick(video) }
+                                    isCopied = video.id in copiedTokens
                                 )
                             }
                         }
+
+                        val handleShare: (PublishedVideo) -> Unit = remember(context) {
+                            { video ->
+                                copyVideoDirectUrlToClipboard(context, video)
+                                val token = System.nanoTime()
+                                copiedTokens[video.id] = token
+                                coroutineScope.launch {
+                                    delay(2000L)
+                                    if (copiedTokens[video.id] == token) {
+                                        copiedTokens.remove(video.id)
+                                    }
+                                }
+                                currentOnShareClick(video)
+                            }
+                        }
+
+                        AndroidView(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("feed_video_list"),
+                            factory = { ctx ->
+                                RecyclerView(ctx).apply {
+                                    tag = "feed_video_list"
+                                    clipToPadding = false
+                                    configureOptimizedRecyclerView(
+                                        recyclerView = this,
+                                        orientation = RecyclerView.VERTICAL,
+                                        viewCacheSize = 6,
+                                        prefetchCount = 3
+                                    )
+                                    val density = ctx.resources.displayMetrics.density
+                                    addItemDecoration(
+                                        SpacingItemDecoration(
+                                            horizontalEdgePx = (16f * density).toInt(),
+                                            topEdgePx = (4f * density).toInt(),
+                                            bottomEdgePx = (88f * density).toInt(),
+                                            itemGapPx = (16f * density).toInt(),
+                                            orientation = RecyclerView.VERTICAL
+                                        )
+                                    )
+                                    adapter = VideoFeedRecyclerAdapter(
+                                        palette = palette,
+                                        onAuthorClick = { currentOnAuthorClick(it) },
+                                        onToggleLike = { currentOnToggleLike(it) },
+                                        onShareClick = handleShare,
+                                        onVideoClick = { currentOnVideoClick(it) }
+                                    )
+                                }
+                            },
+                            update = { rv ->
+                                val adapter = rv.adapter as VideoFeedRecyclerAdapter
+                                adapter.updateEnvironment(
+                                    newPalette = palette,
+                                    onAuthorClick = { currentOnAuthorClick(it) },
+                                    onToggleLike = { currentOnToggleLike(it) },
+                                    onShareClick = handleShare,
+                                    onVideoClick = { currentOnVideoClick(it) }
+                                )
+                                adapter.submitList(feedItems)
+                            }
+                        )
                     }
                 }
             }

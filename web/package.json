@@ -12,7 +12,8 @@
     "firebase": "^11.6.0",
     "lucide-react": "^0.487.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "recharts": "^3.11.1"
   },
   "devDependencies": {
     "@types/react": "^19.1.0",

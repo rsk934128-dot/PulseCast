@@ -95,4 +95,8 @@
     <string name="video_detail_sync_cloud">Sync to Cloud</string>
     <string name="video_detail_syncing_cloud">Syncing…</string>
     <string name="upload_large_file_hint">Note: Clips up to 24 MB sync automatically. Larger files require Firebase Storage enabled in Firebase Console or a stream URL.</string>
+    <string name="people_strip_tap_hint">Tap profile to view</string>
+    <string name="people_quick_chat">Chat</string>
+    <string name="people_strip_heading_format">People on PulseCast (%1$d)</string>
+    <string name="video_comments_cd">Comments</string>
 </resources>

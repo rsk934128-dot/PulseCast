@@ -1,4 +1,17 @@
-import { BellRing, Phone, PhoneOff, Users, Video, Volume2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  BellRing,
+  CheckCircle2,
+  Phone,
+  PhoneOff,
+  RefreshCw,
+  Users,
+  Video,
+  Volume2
+} from "lucide-react";
+import { callAudio, type AudioUiState } from "../callAudio";
+import { useUser } from "../hooks/useUser";
 import type { CallSession, CreatorProfile } from "../types";
 import { UserAvatar } from "./UserAvatar";
 
@@ -6,10 +19,12 @@ interface IncomingCallModalProps {
   session: CallSession;
   callerProfile?: CreatorProfile | null;
   audioBlocked: boolean;
-  onUnlockAudio: () => void;
+  onUnlockAudio?: () => void;
   onAnswer: () => void;
   onDecline: () => void;
 }
+
+type UnlockStatus = "idle" | "unlocking" | "unlocked" | "suspended";
 
 export function IncomingCallModal({
   session,
@@ -19,7 +34,80 @@ export function IncomingCallModal({
   onAnswer,
   onDecline
 }: IncomingCallModalProps) {
-  const callerName = callerProfile?.displayName || session.hostName || "PulseCast Caller";
+  const [liveBlocked, setLiveBlocked] = useState(() => callAudio.isBlocked());
+  const [suspendedAfterAttempt, setSuspendedAfterAttempt] = useState(() =>
+    callAudio.isSuspendedAfterAttempt()
+  );
+  const [audioUiState, setAudioUiState] = useState<AudioUiState>(() => callAudio.getUiState());
+  const [unlockStatus, setUnlockStatus] = useState<UnlockStatus>(() =>
+    callAudio.getUiState() === "Active" ? "unlocked" : "idle"
+  );
+
+  useEffect(() => {
+    const unsubBlocked = callAudio.subscribeBlocked((blocked) => {
+      setLiveBlocked(blocked);
+      if (!blocked) {
+        setUnlockStatus("unlocked");
+      }
+    });
+    const unsubSuspended = callAudio.subscribeSuspendedAfterAttempt((suspended) => {
+      setSuspendedAfterAttempt(suspended);
+      if (suspended) {
+        setUnlockStatus("suspended");
+      }
+    });
+    const unsubUiState = callAudio.subscribeUiState((nextState) => {
+      setAudioUiState(nextState);
+      if (nextState === "Active") {
+        setUnlockStatus("unlocked");
+      } else if (nextState === "Activating") {
+        setUnlockStatus("unlocking");
+      }
+    });
+    return () => {
+      unsubBlocked();
+      unsubSuspended();
+      unsubUiState();
+    };
+  }, []);
+
+  const isAudioBlocked = audioUiState !== "Active" && (audioBlocked || liveBlocked);
+  const remainsSuspendedAfterInteraction =
+    isAudioBlocked && (suspendedAfterAttempt || unlockStatus === "suspended");
+  const isConfirmedUnlocked = audioUiState === "Active" || !isAudioBlocked;
+
+  const handleUnlockClick = async () => {
+    setUnlockStatus("unlocking");
+    const ok = await callAudio.unlock();
+    if (ok) {
+      setUnlockStatus("unlocked");
+      onUnlockAudio?.();
+    } else {
+      setUnlockStatus("suspended");
+    }
+  };
+
+  const handleRetryAudioClick = async () => {
+    setUnlockStatus("unlocking");
+    const ok = await callAudio.activateWithRetry({
+      fromUserGesture: true,
+      maxRetries: 3,
+      recreateIfStuck: true
+    });
+    if (ok) {
+      setUnlockStatus("unlocked");
+      onUnlockAudio?.();
+    } else {
+      setUnlockStatus("suspended");
+    }
+  };
+
+  const callerUser = useUser(
+    session.hostId,
+    callerProfile,
+    session.hostName || "PulseCast Caller"
+  );
+  const callerName = callerUser.displayName;
   const callLabel =
     session.callType === "audio"
       ? "Incoming Audio Call"
@@ -39,9 +127,9 @@ export function IncomingCallModal({
           <div className="incoming-pulse" />
           <UserAvatar
             displayName={callerName}
-            photoUrl={callerProfile?.photoUrl}
-            avatarBase64={callerProfile?.avatarBase64}
-            isOnline={true}
+            photoUrl={callerUser.photoUrl}
+            avatarBase64={callerUser.avatarBase64}
+            isOnline={callerUser.isOnline || true}
             isGroup={session.callType === "group"}
             size={96}
           />
@@ -54,16 +142,52 @@ export function IncomingCallModal({
           </div>
         </div>
 
-        {audioBlocked && (
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            style={{ alignSelf: "center" }}
-            onClick={onUnlockAudio}
+        <button
+          type="button"
+          className={`btn audio-unlock-btn ${
+            isConfirmedUnlocked
+              ? "confirmed"
+              : remainsSuspendedAfterInteraction
+              ? "suspended"
+              : "pending"
+          }`}
+          disabled={unlockStatus === "unlocking"}
+          onClick={() => void handleUnlockClick()}
+          aria-live="polite"
+        >
+          {unlockStatus === "unlocking" || audioUiState === "Activating" ? (
+            <>
+              <RefreshCw size={16} className="spin-icon" />
+              Activating Call Audio…
+            </>
+          ) : isConfirmedUnlocked ? (
+            <>
+              <CheckCircle2 size={16} />
+              Audio Active · Unlocked
+            </>
+          ) : remainsSuspendedAfterInteraction ? (
+            <>
+              <AlertTriangle size={16} />
+              Audio Still Suspended — Tap to Unlock
+            </>
+          ) : (
+            <>
+              <Volume2 size={16} />
+              Unlock Ringtone &amp; Call Audio
+            </>
+          )}
+        </button>
+
+        {remainsSuspendedAfterInteraction && (
+          <div
+            style={{
+              fontSize: "0.8rem",
+              color: "#fde68a",
+              lineHeight: 1.4
+            }}
           >
-            <Volume2 size={15} />
-            Tap to Enable Ringtone Sound
-          </button>
+            Browser autoplay kept audio suspended after interaction. Use Retry Audio below or check site sound permissions.
+          </div>
         )}
 
         <div className="incoming-actions">
@@ -77,10 +201,26 @@ export function IncomingCallModal({
             <span>Decline</span>
           </button>
 
+          {remainsSuspendedAfterInteraction && (
+            <button
+              type="button"
+              className="call-circle-btn retry-audio"
+              disabled={unlockStatus === "unlocking"}
+              onClick={() => void handleRetryAudioClick()}
+              aria-label="Retry Audio"
+            >
+              <RefreshCw size={24} className={unlockStatus === "unlocking" ? "spin-icon" : undefined} />
+              <span>Retry Audio</span>
+            </button>
+          )}
+
           <button
             type="button"
             className="call-circle-btn answer"
-            onClick={onAnswer}
+            onClick={() => {
+              void callAudio.unlock();
+              onAnswer();
+            }}
             aria-label="Answer call"
           >
             {session.callType === "video" ? (
